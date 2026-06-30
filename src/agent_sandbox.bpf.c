@@ -13,6 +13,7 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
+#include "agent_sandbox.h"
 
 #define ENOENT 2
 
@@ -20,11 +21,7 @@
  * the LSM hook becomes the open(2) errno. */
 #define DENY_ERRNO (-ENOENT)
 
-/* Identifier of a file to deny: {containing-device, inode-number}. */
-struct ino_key {
-	__u32 s_dev;	/* inode->i_sb->s_dev (new_encode_dev format) */
-	__u64 ino;	/* inode->i_ino                       */
-};
+/* struct ino_key is defined in the shared header agent_sandbox.h. */
 
 /* Denied inodes. Presence of a key => deny; value is unused (stored as 1).
  * Populated by sandboxd from /etc/agent-sandbox/denylist (path -> stat -> ino). */

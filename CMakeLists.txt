@@ -57,7 +57,16 @@ add_custom_command(
   COMMENT "Generating BPF skeleton (agent_sandbox.skel.h)"
   VERBATIM)
 
-add_custom_target(bpf_skel ALL DEPENDS ${SKEL_H})
+add_custom_target(bpf_skel DEPENDS ${SKEL_H})
+
+# --- daemon -----------------------------------------------------------------
+add_executable(sandboxd src/sandboxd.c)
+target_include_directories(sandboxd PRIVATE
+  ${CMAKE_CURRENT_BINARY_DIR}        # agent_sandbox.skel.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/src)   # agent_sandbox.h
+target_compile_definitions(sandboxd PRIVATE "AGENT_USER=\"${AGENT_USER}\"")
+target_link_libraries(sandboxd PRIVATE PkgConfig::LIBBPF PkgConfig::LIBELF PkgConfig::ZLIB)
+add_dependencies(sandboxd bpf_skel)
 
 
 # --- install of the launcher/unit/denylist is wired in a later commit --------
