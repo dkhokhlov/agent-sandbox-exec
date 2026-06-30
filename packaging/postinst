@@ -13,6 +13,6 @@ fi
 
 # Sanity hints for the admin.
 echo "agent-sandbox-exec: daemon enabled. Add secret files to /etc/agent-sandbox/denylist."
-echo "agent-sandbox-exec: route agents through /usr/local/bin/agent-sandbox-exec."
+echo "agent-sandbox-exec: route agents through /usr/bin/agent-sandbox-exec."
 
 exit 0

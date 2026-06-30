@@ -77,9 +77,10 @@ else
 	pass "hardlink -> blocked (same inode)"
 fi
 
-# environment transparency: real groups, real /proc, real /dev ownership
-NG=$("$LAUNCHER" id -G 2>/dev/null | wc -w)
-[ "$NG" -gt 2 ] && pass "supplementary groups preserved ($NG)" || fail "groups dropped ($NG)"
+# environment transparency: real groups (inside == outside), real /proc, real /dev owner
+OUT=$(id -G)
+IN=$("$LAUNCHER" id -G 2>/dev/null)
+[ "$OUT" = "$IN" ] && pass "supplementary groups preserved (transparent)" || fail "groups differ: out=[$OUT] in=[$IN]"
 "$LAUNCHER" sh -c 'test -r /proc/1/comm' && pass "/proc shows real pid 1" || fail "/proc restricted"
 if [ -e /dev/nvidia0 ]; then
 	OW=$("$LAUNCHER" sh -c 'stat -c %u /dev/nvidia0 2>/dev/null')
