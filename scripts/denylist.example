@@ -1,0 +1,16 @@
+# /etc/agent-sandbox/denylist
+#
+# Files the sandboxed agents (claude / codex / kimi / glm) must NOT read, nor
+# any subprocess they spawn (cat | pipe, hardlinks, cp source -- all blocked at
+# open by the BPF-LSM, returning ENOENT).
+#
+# Format:
+#   - one absolute path per line
+#   - regular FILES only (no directories, no globs)
+#   - blank lines and lines starting with '#' are ignored
+#   - each file must exist (sandboxd stats it -> inode); atomic replaces are
+#     caught by the file watcher and re-resolved
+#
+# Examples (uncomment a line to enable):
+# /home/owner/.ssh/id_rsa
+# /home/owner/.aws/credentials
