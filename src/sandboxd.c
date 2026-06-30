@@ -46,6 +46,7 @@
 #define BPFFS_MNT    "/sys/fs/bpf"
 #define DENYLIST_DIR "/etc/agent-sandbox"
 #define DENYLIST     DENYLIST_DIR "/denylist"
+#define REQ_DIR      "/run/agent-sandbox/req"
 
 #ifndef BPF_FS_MAGIC
 #define BPF_FS_MAGIC 0xcafe4a11
@@ -54,6 +55,8 @@
 #define MAX_DENY 256
 
 static int g_ifd = -1;
+static int g_deny_wd = -1;	/* watch on /etc/agent-sandbox + secret files */
+static int g_req_wd = -1;	/* watch on /run/agent-sandbox/req           */
 
 /* ----- helpers ------------------------------------------------------------- */
 
@@ -157,7 +160,7 @@ static void denylist_apply(struct agent_sandbox_bpf *skel,
 			continue;
 		}
 		struct ino_key key = {
-			.s_dev = (__u32)st.st_dev,
+			.s_dev = (__u64)st.st_dev,
 			.ino   = (__u64)st.st_ino,
 		};
 		__u8 val = 1;
@@ -221,6 +224,58 @@ static __u64 setup_cgroup(void)
 	return (__u64)st.st_ino;
 }
 
+/* Create /run/agent-sandbox/req, owned by the agent user, so the unprivileged
+ * launcher can drop migration requests there. */
+static int setup_request_dir(void)
+{
+	struct passwd *pw = getpwnam(AGENT_USER);
+	if (!pw) {
+		fprintf(stderr, "sandboxd: unknown AGENT_USER '%s'\n", AGENT_USER);
+		return -1;
+	}
+	if (mkdir("/run/agent-sandbox", 0755) != 0 && errno != EEXIST) {
+		perror("sandboxd: mkdir /run/agent-sandbox");
+		return -1;
+	}
+	if (mkdir(REQ_DIR, 0770) != 0 && errno != EEXIST) {
+		perror("sandboxd: mkdir " REQ_DIR);
+		return -1;
+	}
+	if (chown(REQ_DIR, pw->pw_uid, pw->pw_gid) != 0) {
+		perror("sandboxd: chown " REQ_DIR);
+		return -1;
+	}
+	if (chmod(REQ_DIR, 0770) != 0) {
+		perror("sandboxd: chmod " REQ_DIR);
+		return -1;
+	}
+	return 0;
+}
+
+/* Migrate the pid named by `name` into the agent cgroup (root-only write),
+ * then remove the request file (its disappearance signals the launcher). */
+static void migrate_pid(const char *name)
+{
+	char path[PATH_MAX];
+	struct stat st;
+	char *end;
+	long pid;
+
+	snprintf(path, sizeof(path), REQ_DIR "/%s", name);
+	pid = strtol(name, &end, 10);
+	if (*end != '\0' || pid <= 0)
+		goto out;
+	if (stat(path, &st) == 0 && S_ISREG(st.st_mode)) {
+		FILE *cf = fopen(CGROUP_PATH "/cgroup.procs", "w");
+		if (cf) {
+			fprintf(cf, "%ld\n", pid);
+			fclose(cf);
+		}
+	}
+out:
+	unlink(path);
+}
+
 int main(void)
 {
 	struct agent_sandbox_bpf *skel;
@@ -271,6 +326,10 @@ int main(void)
 	printf("sandboxd: agent cgroup=%s id=%llu; BPF attached\n",
 	       CGROUP_PATH, (unsigned long long)cgid);
 
+	if (setup_request_dir() != 0)
+		fprintf(stderr, "sandboxd: WARNING: request dir not ready; "
+				"owner-launched agents cannot be sandboxed\n");
+
 	/* Initial denylist population. */
 	npaths = denylist_read(paths, MAX_DENY);
 	if (npaths >= 0)
@@ -283,8 +342,9 @@ int main(void)
 		agent_sandbox_bpf__destroy(skel);
 		return 1;
 	}
-	inotify_add_watch(g_ifd, DENYLIST_DIR,
+	g_deny_wd = inotify_add_watch(g_ifd, DENYLIST_DIR,
 			  IN_CREATE | IN_MOVED_TO | IN_MODIFY | IN_CLOSE_WRITE | IN_DELETE);
+	g_req_wd = inotify_add_watch(g_ifd, REQ_DIR, IN_CREATE);
 	if (npaths >= 0)
 		install_secret_watches(paths, npaths);
 
@@ -293,8 +353,9 @@ int main(void)
 	for (;;) {
 		struct pollfd pfd = { .fd = g_ifd, .events = POLLIN };
 		char buf[8192] __attribute__((aligned(8)));
-		int r = poll(&pfd, 1, 60 * 1000);
+		int r, n, deny_changed = 0;
 
+		r = poll(&pfd, 1, 60 * 1000);
 		if (r < 0) {
 			if (errno == EINTR)
 				continue;
@@ -303,14 +364,29 @@ int main(void)
 		}
 		if (r == 0)
 			continue;
-		while (read(g_ifd, buf, sizeof(buf)) > 0)
-			;			/* drain */
-
-		printf("sandboxd: denylist change, reloading\n");
-		npaths = denylist_read(paths, MAX_DENY);
-		if (npaths >= 0) {
-			denylist_apply(skel, paths, npaths);
-			install_secret_watches(paths, npaths);
+		n = read(g_ifd, buf, sizeof(buf));
+		if (n < 0) {
+			if (errno == EAGAIN)
+				continue;
+			perror("sandboxd: inotify read");
+			continue;
+		}
+		/* Parse events: req-watch -> migrate a pid; anything else -> denylist reload. */
+		for (char *p = buf; p + sizeof(struct inotify_event) <= buf + n; ) {
+			struct inotify_event *ev = (struct inotify_event *)p;
+			if (ev->wd == g_req_wd && ev->len > 0)
+				migrate_pid(ev->name);
+			else
+				deny_changed = 1;
+			p += sizeof(struct inotify_event) + ev->len;
+		}
+		if (deny_changed) {
+			printf("sandboxd: denylist change, reloading\n");
+			npaths = denylist_read(paths, MAX_DENY);
+			if (npaths >= 0) {
+				denylist_apply(skel, paths, npaths);
+				install_secret_watches(paths, npaths);
+			}
 		}
 	}
 
