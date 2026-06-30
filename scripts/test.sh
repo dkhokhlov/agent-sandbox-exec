@@ -13,7 +13,7 @@ set -u
 
 P=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 OBJ=$P/build/agent_sandbox.bpf.o
-LAUNCHER=${LAUNCHER:-/usr/local/bin/agent-sandbox-exec}
+LAUNCHER=${LAUNCHER:-/usr/bin/agent-sandbox-exec}
 CGROUP=/sys/fs/cgroup/agent-sandbox
 DENYLIST=/etc/agent-sandbox/denylist
 FAIL=0

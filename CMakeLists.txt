@@ -4,6 +4,12 @@ project(agent-sandbox-exec VERSION 0.1.0 LANGUAGES C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+# Install under /usr (Debian convention for a system package). Overridable on
+# the cmake command line with -DCMAKE_INSTALL_PREFIX=...
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+  set(CMAKE_INSTALL_PREFIX "/usr" CACHE PATH "Install prefix" FORCE)
+endif()
+
 # Which user's agents we confine (cgroup delegation target). Overridable on the
 # cmake command line: -DAGENT_USER=...
 set(AGENT_USER "owner" CACHE STRING "User whose agents are confined (cgroup delegation target)")
@@ -85,3 +91,21 @@ install(FILES scripts/agent-sandbox.service
 install(FILES scripts/denylist.example
         DESTINATION /etc/agent-sandbox
         RENAME denylist)
+
+# --- packaging (.deb via CPack) ---------------------------------------------
+set(CPACK_GENERATOR                  DEB)
+set(CPACK_PACKAGE_NAME               "agent-sandbox-exec")
+set(CPACK_PACKAGE_VERSION            "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "BPF-LSM file-read denylist for CLI agents")
+set(CPACK_PACKAGE_CONTACT            "owner <owner@localhost>")
+set(CPACK_DEBIAN_PACKAGE_MAINTAINER  "owner")
+set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "amd64")
+set(CPACK_DEBIAN_PACKAGE_SECTION     "admin")
+set(CPACK_DEBIAN_PACKAGE_PRIORITY    "optional")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS     "libbpf1, libelf1, zlib1g")
+set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
+  ${CMAKE_CURRENT_SOURCE_DIR}/packaging/postinst
+  ${CMAKE_CURRENT_SOURCE_DIR}/packaging/prerm
+  ${CMAKE_CURRENT_SOURCE_DIR}/packaging/postrm
+  ${CMAKE_CURRENT_SOURCE_DIR}/packaging/conffiles)
+include(CPack)
