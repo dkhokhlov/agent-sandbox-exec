@@ -69,4 +69,19 @@ target_link_libraries(sandboxd PRIVATE PkgConfig::LIBBPF PkgConfig::LIBELF PkgCo
 add_dependencies(sandboxd bpf_skel)
 
 
-# --- install of the launcher/unit/denylist is wired in a later commit --------
+# --- install rules (used by both `cmake --install` and CPack) ----------------
+include(GNUInstallDirs)
+
+install(TARGETS sandboxd
+        RUNTIME DESTINATION ${CMAKE_INSTALL_SBINDIR})        # /usr/local/sbin
+
+install(PROGRAMS scripts/agent-sandbox-exec.sh
+        DESTINATION ${CMAKE_INSTALL_BINDIR}                  # /usr/local/bin
+        RENAME agent-sandbox-exec)
+
+install(FILES scripts/agent-sandbox.service
+        DESTINATION /etc/systemd/system)
+
+install(FILES scripts/denylist.example
+        DESTINATION /etc/agent-sandbox
+        RENAME denylist)
