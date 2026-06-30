@@ -92,6 +92,10 @@ install(FILES scripts/denylist.example
         DESTINATION /etc/agent-sandbox
         RENAME denylist)
 
+# man pages
+install(FILES man/agent-sandbox-exec.1     DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
+install(FILES man/agent-sandbox-denylist.5 DESTINATION ${CMAKE_INSTALL_MANDIR}/man5)
+
 # --- packaging (.deb via CPack) ---------------------------------------------
 set(CPACK_GENERATOR                  DEB)
 set(CPACK_PACKAGE_NAME               "agent-sandbox-exec")

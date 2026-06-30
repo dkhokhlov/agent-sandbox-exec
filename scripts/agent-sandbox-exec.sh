@@ -1,45 +1,81 @@
 #!/bin/sh
-# agent-sandbox-exec — get ourselves migrated into the agent cgroup, then exec.
+# agent-sandbox-exec — run a command inside the BPF-LSM agent sandbox.
 #
-# The owner can't write cgroup.procs directly (cgroup v2 needs a delegated
-# subtree, which isn't configured here). So we drop a request (a file named
-# after our pid) into /run/agent-sandbox/req; sandboxd (root) sees it via
-# inotify, migrates us into /sys/fs/cgroup/agent-sandbox, and removes the file.
-# We wait for the file to disappear, then exec the agent. Cgroup membership is
-# inherited by every descendant, so the BPF-LSM denylist covers the whole tree.
+# Migrates this process (and thus all its descendants) into the agent cgroup so
+# the BPF-LSM denylist (/etc/agent-sandbox/denylist) blocks opens of the listed
+# secret files (returns ENOENT). No namespace is created — the command sees the
+# real mount table, /dev ownership, supplementary groups, and /proc.
 #
-# No namespace is created — the agent sees the real mount table, /dev ownership,
-# supplementary groups, and /proc, so it can still troubleshoot the system.
-#
-# Fail-closed: if the sandbox isn't ready we REFUSE to start the agent rather
-# than run unprotected. Override with AGENT_SANDBOX_INSECURE=1 (unsandboxed).
+# Fail-closed: if sandboxd isn't running, the command is NOT executed (exit 2),
+# unless AGENT_SANDBOX_INSECURE=1.
 
 set -eu
 
+VERSION="0.1.0"
 CGROUP=/sys/fs/cgroup/agent-sandbox
 REQDIR=/run/agent-sandbox/req
 
-if [ ! -d "$CGROUP" ] || [ ! -d "$REQDIR" ]; then
-	if [ "${AGENT_SANDBOX_INSECURE:-0}" = "1" ]; then
-		echo "agent-sandbox-exec: WARNING: sandbox not ready; running UNSANDBOXED" >&2
-		exec "$@"
-	fi
-	echo "agent-sandbox-exec: sandbox not ready ($CGROUP or $REQDIR missing; is sandboxd running?)." >&2
+usage() {
+	cat <<EOF
+Usage: agent-sandbox-exec [--help|--version] <command> [args...]
+
+Run <command> sandboxed: it and every process it spawns is migrated into the
+agent cgroup, so the BPF-LSM denylist (/etc/agent-sandbox/denylist) blocks opens
+of the listed secret files (returns ENOENT). cat | pipe, hardlinks, and cp of a
+listed file are all blocked. No namespace is created -- the command sees the
+real system environment and can troubleshoot normally.
+
+Options:
+  -h, --help        Show this help and exit.
+  -V, --version     Show version and exit.
+
+Environment:
+  AGENT_SANDBOX_INSECURE=1   Run <command> UNSANDBOXED (no protection).
+  AGENT_SANDBOX_CGROUP       Override the cgroup path (default $CGROUP).
+  AGENT_SANDBOX_REQ          Override the request dir (default $REQDIR).
+
+Exit codes:
+   0   command ran (and exited 0)
+   2   sandbox not ready / migration timed out / no command given
+   *   otherwise the command's own exit code
+
+See also: agent-sandbox-denylist(5).
+EOF
+}
+
+case "${1:-}" in
+  -h|--help)    usage; exit 0 ;;
+  -V|--version) echo "agent-sandbox-exec $VERSION"; exit 0 ;;
+  "")           usage >&2; exit 2 ;;
+esac
+
+# Insecure bypass takes precedence: run unsandboxed immediately.
+if [ "${AGENT_SANDBOX_INSECURE:-0}" = "1" ]; then
+	echo "agent-sandbox-exec: WARNING: AGENT_SANDBOX_INSECURE=1 -- running unsandboxed" >&2
+	exec "$@"
+fi
+
+: "${AGENT_SANDBOX_CGROUP:=$CGROUP}"
+: "${AGENT_SANDBOX_REQ:=$REQDIR}"
+
+if [ ! -d "$AGENT_SANDBOX_CGROUP" ] || [ ! -d "$AGENT_SANDBOX_REQ" ]; then
+	echo "agent-sandbox-exec: sandbox not ready ($AGENT_SANDBOX_CGROUP or $AGENT_SANDBOX_REQ missing; is sandboxd running?)." >&2
 	echo "agent-sandbox-exec: refusing to start unprotected. Set AGENT_SANDBOX_INSECURE=1 to bypass." >&2
 	exit 2
 fi
 
-# Request migration; sandboxd removes the file once we're in the cgroup.
-req="$REQDIR/$$"
+# Ask sandboxd (root) to migrate us into the cgroup; it removes the file when done.
+req="$AGENT_SANDBOX_REQ/$$"
 : > "$req"
 i=0
-while [ -e "$req" ] && [ "$i" -lt 200 ]; do
+while [ -e "$req" ] && [ "$i" -lt 150 ]; do
 	i=$((i + 1))
 	sleep 0.01
 done
 if [ -e "$req" ]; then
 	rm -f "$req" 2>/dev/null || true
 	echo "agent-sandbox-exec: migration timed out (sandboxd not responding?)." >&2
+	echo "agent-sandbox-exec: refusing to start unprotected. Set AGENT_SANDBOX_INSECURE=1 to bypass." >&2
 	exit 2
 fi
 
