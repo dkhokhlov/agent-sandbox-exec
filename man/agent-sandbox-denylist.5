@@ -1,0 +1,60 @@
+.TH AGENT-SANDBOX-DENYLIST 5 "2026-06-30" "agent-sandbox-exec 0.1.0" "File Formats"
+.SH NAME
+agent-sandbox-denylist \- secret file denylist for agent-sandbox-exec
+.SH DESCRIPTION
+The file
+.I /etc/agent-sandbox/denylist
+lists regular files that sandboxed agents (and every process they spawn) must
+not read. Opens of these files are denied by the BPF-LSM program with
+.BR ENOENT .
+.PP
+It is watched by
+.B sandboxd
+and re-applied live \(em no restart is needed after editing.
+.SH FORMAT
+One path per line:
+.PP
+.RS 4
+.IP \(bu 2
+an absolute path to a
+.I regular file
+(no directories, no wildcards);
+.IP \(bu 2
+blank lines and lines beginning with
+.B #
+are ignored;
+.IP \(bu 2
+the file must exist
+.RI ( sandboxd
+stats each path to resolve its inode; a missing or non-regular path is skipped
+with a warning).
+.RE
+.PP
+Matching is by
+.I inode
+.RI ( {device, inode} ),
+so hardlinks and bind-mounts of a listed file are also blocked. An atomic
+replace of a secret (a new inode) is caught by the per-file watcher and
+re-resolved automatically.
+.SH EXAMPLES
+.PP
+.nf
+# /etc/agent-sandbox/denylist
+/home/owner/.ssh/id_rsa
+/home/owner/.aws/credentials
+.fi
+.SH CAVEATS
+.PP
+Only the content read is blocked;
+.BR stat (2)
+(metadata) of a listed file still succeeds. A process
+.I outside
+the sandbox opening a secret and passing the fd via a Unix socket can bypass
+this scheme.
+.SH FILES
+.TP
+.I /etc/agent-sandbox/denylist
+The denylist (a dpkg conffile \(em edits survive upgrades).
+.SH "SEE ALSO"
+.BR agent-sandbox-exec (1),
+.BR sandboxd (8).

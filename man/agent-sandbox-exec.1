@@ -1,0 +1,93 @@
+.TH AGENT-SANDBOX-EXEC 1 "2026-06-30" "agent-sandbox-exec 0.1.0" "User Commands"
+.SH NAME
+agent-sandbox-exec \- run a command inside the BPF-LSM agent sandbox
+.SH SYNOPSIS
+.B agent-sandbox-exec
+.RB [ -h ]
+.RB [ -V ]
+.I command
+.RI [ args ...]
+.SH DESCRIPTION
+.B agent-sandbox-exec
+runs
+.I command
+(and its arguments) inside the agent sandbox: the process and every process it
+spawns is migrated into the agent cgroup
+.RI ( /sys/fs/cgroup/agent-sandbox ),
+where a BPF-LSM program on the
+.I file_open
+hook blocks opens of the files listed in
+.IR /etc/agent-sandbox/denylist ,
+returning
+.BR ENOENT .
+.PP
+This defeats read-via-delegation \(em
+.BR "cat secret | \&..." ,
+hardlinks to a secret, and
+.B "cp secret"
+are all blocked, because the source
+.B open
+is denied.
+.PP
+No mount or user namespace is created, so the command sees the real environment
+\(em real mount table, real
+.I /dev
+ownership, real supplementary groups, real
+.I /proc
+\(em and can still troubleshoot kernel and system issues accurately.
+.SH OPTIONS
+.TP
+.BR \-h , " \-\-help"
+Print usage and exit.
+.TP
+.BR \-V , " \-\-version"
+Print version and exit.
+.SH ENVIRONMENT
+.TP
+.B AGENT_SANDBOX_INSECURE=1
+Run
+.I command
+.B unsandboxed
+(no protection). Takes precedence over everything else.
+.TP
+.B AGENT_SANDBOX_CGROUP
+Override the agent cgroup path (default
+.IR /sys/fs/cgroup/agent-sandbox ).
+.TP
+.B AGENT_SANDBOX_REQ
+Override the migration request directory (default
+.IR /run/agent-sandbox/req ).
+.SH "EXIT STATUS"
+.TP
+.B 0
+The command ran and exited 0.
+.TP
+.B 2
+The sandbox was not ready, migration timed out (is
+.B sandboxd
+running?), or no command was given. The command was
+.I not
+executed.
+.TP
+.I *
+Otherwise the command's own exit status.
+.SH "FAIL-CLOSED BEHAVIOUR"
+If
+.B sandboxd
+is not running, the command is
+.I not
+execited (exit 2). The launcher never runs a command unprotected unless
+.B AGENT_SANDBOX_INSECURE=1
+is set.
+.SH FILES
+.TP
+.I /etc/agent-sandbox/denylist
+The list of secret files to block \(em see
+.BR agent-sandbox-denylist (5).
+.TP
+.I /sys/fs/cgroup/agent-sandbox
+The agent cgroup.
+.SH "SEE ALSO"
+.BR agent-sandbox-denylist (5),
+.BR sandboxd (8),
+.BR systemctl (1).
