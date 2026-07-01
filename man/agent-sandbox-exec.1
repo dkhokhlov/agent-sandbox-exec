@@ -1,4 +1,4 @@
-.TH AGENT-SANDBOX-EXEC 1 "2026-06-30" "agent-sandbox-exec 0.1.1" "User Commands"
+.TH AGENT-SANDBOX-EXEC 1 "2026-07-01" "agent-sandbox-exec 0.1.1" "User Commands"
 .SH NAME
 agent-sandbox-exec \- run a command inside the BPF-LSM agent sandbox
 .SH SYNOPSIS
@@ -12,14 +12,19 @@ agent-sandbox-exec \- run a command inside the BPF-LSM agent sandbox
 runs
 .I command
 (and its arguments) inside the agent sandbox: the process and every process it
-spawns is migrated into the agent cgroup
-.RI ( /sys/fs/cgroup/agent-sandbox-exec ),
+spawns is migrated into a per-uid agent cgroup
+.RI ( /sys/fs/cgroup/agent-sandbox-exec/uid-<uid> ),
 where a BPF-LSM program on the
 .I file_open
-hook blocks opens of the files listed in
-.IR /etc/agent-sandbox-exec/denylist ,
-returning
+hook blocks opens of the files listed in the denylist, returning
 .BR ENOENT .
+.PP
+The effective denylist for a uid is the union of the root-controlled base list
+.RI ( /etc/agent-sandbox-exec/denylist )
+and that uid's home list
+.RI ( ~/.config/agent-sandbox-exec/denylist ).
+A user-controlled home list is safe because deny entries are scoped to the
+user's own cgroup: they can only block opens inside that user's own sandbox.
 .PP
 This defeats read-via-delegation \(em
 .BR "cat secret | \&..." ,
@@ -42,21 +47,6 @@ Print usage and exit.
 .TP
 .BR \-V , " \-\-version"
 Print version and exit.
-.SH ENVIRONMENT
-.TP
-.B AGENT_SANDBOX_INSECURE=1
-Run
-.I command
-.B unsandboxed
-(no protection). Takes precedence over everything else.
-.TP
-.B AGENT_SANDBOX_CGROUP
-Override the agent cgroup path (default
-.IR /sys/fs/cgroup/agent-sandbox-exec ).
-.TP
-.B AGENT_SANDBOX_REQ
-Override the migration request directory (default
-.IR /run/agent-sandbox-exec/req ).
 .SH "EXIT STATUS"
 .TP
 .B 0
@@ -72,22 +62,33 @@ executed.
 .I *
 Otherwise the command's own exit status.
 .SH "FAIL-CLOSED BEHAVIOUR"
-If
+Fail-closed is unconditional. If
 .B agent-sandbox-execd
-is not running, the command is
+is not running, the agent cgroup is absent, or migration does not complete, the
+command is
 .I not
-execited (exit 2). The launcher never runs a command unprotected unless
-.B AGENT_SANDBOX_INSECURE=1
-is set.
+executed (exit 2). There is no escape-hatch environment variable: to run a
+command without the sandbox, invoke it directly rather than through this
+wrapper.
+.PP
+A uid's denylist is loaded on first launch and then
+.I frozen
+until
+.B agent-sandbox-execd
+is restarted. To apply denylist changes (base or home), restart the daemon
+.RB ( "systemctl restart agent-sandbox-execd" ).
 .SH FILES
 .TP
 .I /etc/agent-sandbox-exec/denylist
-The list of secret files to block \(em see
+Root-controlled base denylist, applied to every sandboxed uid \(em see
 .BR agent-sandbox-exec-denylist (5).
 .TP
+.I ~/.config/agent-sandbox-exec/denylist
+Per-user home denylist (NFS-safe); unioned with the base list for that uid.
+.TP
 .I /sys/fs/cgroup/agent-sandbox-exec
-The agent cgroup.
+Parent cgroup (root-owned, not delegated); per-uid children
+.I uid-<uid>
+hold the sandboxed processes.
 .SH "SEE ALSO"
-.BR agent-sandbox-exec-denylist (5),
-.BR agent-sandbox-execd (8),
-.BR systemctl (1).
+.BR agent-sandbox-exec-denylist (5)

@@ -1,18 +1,44 @@
-.TH AGENT-SANDBOX-EXEC-DENYLIST 5 "2026-06-30" "agent-sandbox-exec 0.1.1" "File Formats"
+.TH AGENT-SANDBOX-EXEC-DENYLIST 5 "2026-07-01" "agent-sandbox-exec 0.1.1" "File Formats"
 .SH NAME
-agent-sandbox-exec-denylist \- secret file denylist for agent-sandbox-exec
+agent-sandbox-exec-denylist \- secret file denylists for agent-sandbox-exec
 .SH DESCRIPTION
-The file
+.B agent-sandbox-exec
+enforces two denylists per sandboxed uid, applied as a union to that uid's
+cgroup only:
+.TP
 .I /etc/agent-sandbox-exec/denylist
-lists regular files that sandboxed agents (and every process they spawn) must
-not read. Opens of these files are denied by the BPF-LSM program with
-.BR ENOENT .
+Root-controlled
+.I base
+list, applied to every sandboxed uid. A dpkg conffile \(em edits survive
+upgrades. Use it for cluster-wide mandatory denies.
+.TP
+.I ~/.config/agent-sandbox-exec/denylist
+Per-user
+.I home
+list, read from the uid's home directory (NFS-mounted is fine). Because deny
+entries are scoped to the user's own cgroup, a user-controlled list can only
+block opens inside that user's own sandbox.
 .PP
-It is watched by
+Opens of listed files by sandboxed processes (and every process they spawn) are
+denied by the BPF-LSM program with
+.BR ENOENT .
+.SH "LOADING AND RELOAD"
+A uid's denylist is read
+.I once
+\(em at that uid's first launch, or at daemon startup for already-active uids
+\(em and then
+.I frozen
+until
 .B agent-sandbox-execd
-and re-applied live \(em no restart is needed after editing.
+is restarted. There is no live reload, no inotify watch on the denylists, and
+no polling: to apply any denylist change (base or home), restart the daemon
+.RB ( "systemctl restart agent-sandbox-execd" ).
+On restart, the daemon re-scans existing per-uid cgroups and re-reads every
+active uid's list from disk, so protection for running agents is restored and
+refreshed in one step. NFS home is fine precisely because no inotify events are
+assumed.
 .SH FORMAT
-One path per line:
+One path per line, in either denylist:
 .PP
 .RS 4
 .IP \(bu 2
@@ -27,21 +53,31 @@ are ignored;
 the file must exist
 .RI ( agent-sandbox-execd
 stats each path to resolve its inode; a missing or non-regular path is skipped
-with a warning).
+with a warning);
+.IP \(bu 2
+in the
+.I home
+list, symlink entries are rejected (skipped with a warning) for
+predictability \(em the home list is user-controlled and a symlink that later
+retargets would be a self-surprise. The base list follows symlinks normally
+(root-controlled).
 .RE
 .PP
 Matching is by
 .I inode
-.RI ( {device, inode} ),
+.RI ( {cgroup-id, device, inode} ),
 so hardlinks and bind-mounts of a listed file are also blocked. An atomic
-replace of a secret (a new inode) is caught by the per-file watcher and
-re-resolved automatically.
+replace of a secret (a new inode) is not re-resolved until the next daemon
+restart.
 .SH EXAMPLES
 .PP
 .nf
-# /etc/agent-sandbox-exec/denylist
+# /etc/agent-sandbox-exec/denylist \(em cluster-wide base list
 /home/owner/.ssh/id_rsa
 /home/owner/.aws/credentials
+
+# ~/.config/agent-sandbox-exec/denylist \(em per-user additions
+/home/owner/.config/other-tool/token
 .fi
 .SH CAVEATS
 .PP
@@ -50,11 +86,7 @@ Only the content read is blocked;
 (metadata) of a listed file still succeeds. A process
 .I outside
 the sandbox opening a secret and passing the fd via a Unix socket can bypass
-this scheme.
-.SH FILES
-.TP
-.I /etc/agent-sandbox-exec/denylist
-The denylist (a dpkg conffile \(em edits survive upgrades).
+this scheme. Denylist changes take effect only after restarting
+.BR agent-sandbox-execd .
 .SH "SEE ALSO"
-.BR agent-sandbox-exec (1),
-.BR agent-sandbox-execd (8).
+.BR agent-sandbox-exec (1)

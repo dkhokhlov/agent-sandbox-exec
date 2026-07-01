@@ -8,8 +8,12 @@ if [ "$1" = "purge" ]; then
 		systemctl disable agent-sandbox-execd.service || true
 		systemctl daemon-reload || true
 	fi
+	# Remove per-uid child cgroups (if empty) before the parent.
+	for d in /sys/fs/cgroup/agent-sandbox-exec/uid-*; do
+		[ -d "$d" ] && rmdir "$d" 2>/dev/null || true
+	done
 	rmdir /sys/fs/cgroup/agent-sandbox-exec 2>/dev/null || true
-	rm -f /sys/fs/bpf/deny_map /sys/fs/bpf/target_cgid_map 2>/dev/null || true
+	rm -f /sys/fs/bpf/deny_map /sys/fs/bpf/agent_cgid_set 2>/dev/null || true
 	# /etc/agent-sandbox-exec/denylist is a conffile -> dpkg removes it on purge;
 	# tidy the directory if empty.
 	rmdir /etc/agent-sandbox-exec 2>/dev/null || true
