@@ -25,6 +25,7 @@ FAIL=0
 
 ASE_UID=${ASE_UID:-owner}
 ASE_UID2=${ASE_UID2:-}
+HOME_DENY2=		# bound early so cleanup's strip_temps doesn't trip set -u when ASE_UID2 is unset
 
 if command -v bpftool >/dev/null 2>&1; then BPFTOOL=bpftool
 elif [ -x /usr/sbin/bpftool ]; then BPFTOOL=/usr/sbin/bpftool
@@ -76,9 +77,28 @@ TEST_HOME=$(home_of "$ASE_UID")
 [ -n "$TEST_HOME" ] || { echo "  SKIP  no home for uid '$ASE_UID'"; exit "$FAIL"; }
 HOME_DENY="$TEST_HOME/.config/agent-sandbox-exec/denylist"
 
+# Reset ASE_UID (and ASE_UID2 if set) to a clean "not yet loaded" state so D1
+# exercises the true first-launch-load path (cgroup created + list read on the
+# first request). The per-uid cgroup persists across daemon restarts — the
+# daemon re-scans uid-* dirs at start and freezes each uid's list — so without
+# this reset a re-run finds ASE_UID already loaded with a frozen list and D1
+# fails spuriously. The cgroup is empty between runs (every sandboxed proc has
+# exited), so rmdir succeeds; if it doesn't (stray proc), D1 may fail and
+# surface that. Stale cgids left in agent_cgid_set are inert orphans (no proc
+# in the deleted cgroup) and the new cgroup gets a fresh cgid.
+ASE_UID_NUM=$(id -u "$ASE_UID")
+systemctl stop agent-sandbox-execd 2>/dev/null || true
+rmdir "$CGROUP/uid-$ASE_UID_NUM" 2>/dev/null || true
+[ -n "$ASE_UID2" ] && rmdir "$CGROUP/uid-$(id -u "$ASE_UID2")" 2>/dev/null || true
+systemctl start agent-sandbox-execd
+sleep 0.4
+
 SECRET=$(mktemp /tmp/asb_XXXXXX)
 echo "TOPSECRET-$(head -c16 /dev/urandom | base64)" > "$SECRET"
-chmod 600 "$SECRET"
+# world-readable so the launching uid's POSIX inode_permission succeeds and the
+# BPF-LSM deny (ENOENT) is the sole discriminator; inode_permission runs before
+# security_file_open, so a 600 root-owned secret would EACCES before the hook.
+chmod 644 "$SECRET"
 mkdir -p "$(dirname "$HOME_DENY")"
 cleanup() {
 	strip_temps "$HOME_DENY"
@@ -130,7 +150,7 @@ fi
 # (frozen) until the daemon restarts; after restart, new launches deny it.
 SECRET2=$(mktemp /tmp/asb_XXXXXX)
 echo "FROZEN-$(head -c16 /dev/urandom | base64)" > "$SECRET2"
-chmod 600 "$SECRET2"
+chmod 644 "$SECRET2"	# world-readable: BPF ENOENT must be the discriminator, not EACCES
 printf '%s\n' "$SECRET2" >> "$HOME_DENY"	# ASE_UID already loaded above -> frozen out
 if as_uid "$LAUNCHER" cat "$SECRET2" >/tmp/asb_out2 2>/tmp/asb_err2; then
 	pass "pre-restart: new home entry not denied (list frozen until restart)"
@@ -155,7 +175,7 @@ if [ -n "$ASE_UID2" ]; then
 		HOME_DENY2="$HOME2/.config/agent-sandbox-exec/denylist"
 		SECRET_B=$(mktemp /tmp/asb_XXXXXX)
 		echo "BONLY-$(head -c16 /dev/urandom | base64)" > "$SECRET_B"
-		chmod 600 "$SECRET_B"
+		chmod 644 "$SECRET_B"	# world-readable so both uids can read via POSIX; BPF isolates
 		mkdir -p "$(dirname "$HOME_DENY2")"
 		printf '%s\n' "$SECRET_B" >> "$HOME_DENY2"
 		# A denied A's secret, allowed B's
