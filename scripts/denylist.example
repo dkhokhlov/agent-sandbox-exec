@@ -1,4 +1,5 @@
-# /etc/agent-sandbox/denylist
+# /etc/agent-sandbox-exec/denylist — root-controlled base list (cluster-wide).
+# Per-user additions go in ~/.config/agent-sandbox-exec/denylist.
 #
 # Files the sandboxed agents (claude / codex / kimi / glm) must NOT read, nor
 # any subprocess they spawn (cat | pipe, hardlinks, cp source -- all blocked at
@@ -8,8 +9,11 @@
 #   - one absolute path per line
 #   - regular FILES only (no directories, no globs)
 #   - blank lines and lines starting with '#' are ignored
-#   - each file must exist (agent-sandbox-execd stats it -> inode); atomic replaces are
-#     caught by the file watcher and re-resolved
+#   - each file must exist (agent-sandbox-execd stats it -> inode)
+#   - symlink entries in the HOME list are rejected (base list follows them)
+#
+# Reloading: a uid's list is loaded on first launch and frozen until the
+# daemon is restarted. To apply changes: systemctl restart agent-sandbox-execd
 #
 # Examples (uncomment a line to enable):
 # /home/owner/.ssh/id_rsa

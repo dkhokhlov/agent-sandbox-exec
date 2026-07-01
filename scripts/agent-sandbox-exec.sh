@@ -1,13 +1,17 @@
 #!/bin/sh
 # agent-sandbox-exec — run a command inside the BPF-LSM agent sandbox.
 #
-# Migrates this process (and thus all its descendants) into the agent cgroup so
-# the BPF-LSM denylist (/etc/agent-sandbox-exec/denylist) blocks opens of the listed
-# secret files (returns ENOENT). No namespace is created — the command sees the
-# real mount table, /dev ownership, supplementary groups, and /proc.
+# Migrates this process (and thus all its descendants) into a per-uid agent
+# cgroup so the BPF-LSM denylist blocks opens of the listed secret files (returns
+# ENOENT). The denylist is the union of the root-controlled base list
+# (/etc/agent-sandbox-exec/denylist) and your home list
+# (~/.config/agent-sandbox-exec/denylist); it is loaded once on first launch
+# and frozen until the daemon is restarted. No namespace is created — the
+# command sees the real mount table, /dev ownership, supplementary groups, /proc.
 #
-# Fail-closed: if agent-sandbox-execd isn't running, the command is NOT executed (exit 2),
-# unless AGENT_SANDBOX_INSECURE=1.
+# Fail-closed is unconditional: if the sandbox isn't ready, the command is NOT
+# executed (exit 2). To run a command without the sandbox, run it directly
+# (not through this wrapper) — that keeps the unsandboxed choice explicit.
 
 set -eu
 
@@ -19,18 +23,20 @@ usage() {
 	cat <<EOF
 Usage: agent-sandbox-exec [--help|--version] <command> [args...]
 
-Run <command> sandboxed: it and every process it spawns is migrated into the
-agent cgroup, so the BPF-LSM denylist (/etc/agent-sandbox-exec/denylist) blocks opens
-of the listed secret files (returns ENOENT). cat | pipe, hardlinks, and cp of a
-listed file are all blocked. No namespace is created -- the command sees the
-real system environment and can troubleshoot normally.
+Run <command> sandboxed: it and every process it spawns is migrated into a
+per-uid agent cgroup, so the BPF-LSM denylist blocks opens of the listed secret
+files (returns ENOENT). cat | pipe, hardlinks, and cp of a listed file are all
+blocked. The denylist is the union of the root-controlled base list
+(/etc/agent-sandbox-exec/denylist) and your home list
+(~/.config/agent-sandbox-exec/denylist). No namespace is created -- the command
+sees the real system environment and can troubleshoot normally.
+
+A uid's denylist is loaded on first launch and then frozen; to apply denylist
+changes, restart agent-sandbox-execd.
 
 Options:
   -h, --help        Show this help and exit.
   -V, --version     Show version and exit.
-
-Environment:
-  AGENT_SANDBOX_INSECURE=1   Run <command> UNSANDBOXED (no protection).
 
 Exit codes:
    0   command ran (and exited 0)
@@ -47,20 +53,15 @@ case "${1:-}" in
   "")           usage >&2; exit 2 ;;
 esac
 
-# Insecure bypass takes precedence: run unsandboxed immediately.
-if [ "${AGENT_SANDBOX_INSECURE:-0}" = "1" ]; then
-	echo "agent-sandbox-exec: WARNING: AGENT_SANDBOX_INSECURE=1 -- running unsandboxed" >&2
-	exec "$@"
-fi
-
 if [ ! -d "$CGROUP" ] || [ ! -d "$REQDIR" ]; then
-	echo "agent-sandbox-exec: sandbox not ready ($CGROUP or $REQDIR missing; is agent-sandbox-execd running?)." >&2
-	echo "agent-sandbox-exec: refusing to start unprotected. Set AGENT_SANDBOX_INSECURE=1 to bypass." >&2
+	echo "agent-sandbox-exec: sandbox not ready ($CGROUP or $REQDIR missing;" >&2
+	echo "agent-sandbox-exec: is agent-sandbox-execd running?)." >&2
+	echo "agent-sandbox-exec: refusing to start unprotected." >&2
 	exit 2
 fi
 
-# Ask agent-sandbox-execd (root) to migrate us into the cgroup; it removes the request file
-# only after a verified successful migration.
+# Ask agent-sandbox-execd (root) to migrate us into our per-uid cgroup; it
+# removes the request file only after a verified successful migration.
 req="$REQDIR/$$"
 : > "$req"
 i=0
@@ -71,7 +72,7 @@ done
 if [ -e "$req" ]; then
 	rm -f "$req" 2>/dev/null || true
 	echo "agent-sandbox-exec: migration timed out (agent-sandbox-execd not responding?)." >&2
-	echo "agent-sandbox-exec: refusing to start unprotected. Set AGENT_SANDBOX_INSECURE=1 to bypass." >&2
+	echo "agent-sandbox-exec: refusing to start unprotected." >&2
 	exit 2
 fi
 

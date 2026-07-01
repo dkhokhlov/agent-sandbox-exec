@@ -10,10 +10,6 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
   set(CMAKE_INSTALL_PREFIX "/usr" CACHE PATH "Install prefix" FORCE)
 endif()
 
-# Which user's agents we confine (cgroup delegation target). Overridable on the
-# cmake command line: -DAGENT_USER=...
-set(AGENT_USER "owner" CACHE STRING "User whose agents are confined (cgroup delegation target)")
-
 # --- toolchain discovery -----------------------------------------------------
 find_program(CLANG      clang       REQUIRED)
 # Debian ships bpftool in /usr/sbin (not on a normal user's PATH).
@@ -78,7 +74,6 @@ add_executable(agent-sandbox-execd src/agent-sandbox-execd.c)
 target_include_directories(agent-sandbox-execd PRIVATE
   ${CMAKE_CURRENT_BINARY_DIR}        # agent_sandbox.skel.h
   ${CMAKE_CURRENT_SOURCE_DIR}/src)   # agent_sandbox.h
-target_compile_definitions(agent-sandbox-execd PRIVATE "AGENT_USER=\"${AGENT_USER}\"")
 target_link_libraries(agent-sandbox-execd PRIVATE PkgConfig::LIBBPF PkgConfig::LIBELF PkgConfig::ZLIB)
 add_dependencies(agent-sandbox-execd bpf_skel)
 
