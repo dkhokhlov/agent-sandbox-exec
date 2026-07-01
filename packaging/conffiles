@@ -1,2 +1,1 @@
 /etc/agent-sandbox/denylist
-/etc/systemd/system/agent-sandbox.service

@@ -11,7 +11,7 @@
 
 set -eu
 
-VERSION="0.1.0"
+VERSION="0.1.1"
 CGROUP=/sys/fs/cgroup/agent-sandbox
 REQDIR=/run/agent-sandbox/req
 
@@ -31,8 +31,6 @@ Options:
 
 Environment:
   AGENT_SANDBOX_INSECURE=1   Run <command> UNSANDBOXED (no protection).
-  AGENT_SANDBOX_CGROUP       Override the cgroup path (default $CGROUP).
-  AGENT_SANDBOX_REQ          Override the request dir (default $REQDIR).
 
 Exit codes:
    0   command ran (and exited 0)
@@ -55,17 +53,15 @@ if [ "${AGENT_SANDBOX_INSECURE:-0}" = "1" ]; then
 	exec "$@"
 fi
 
-: "${AGENT_SANDBOX_CGROUP:=$CGROUP}"
-: "${AGENT_SANDBOX_REQ:=$REQDIR}"
-
-if [ ! -d "$AGENT_SANDBOX_CGROUP" ] || [ ! -d "$AGENT_SANDBOX_REQ" ]; then
-	echo "agent-sandbox-exec: sandbox not ready ($AGENT_SANDBOX_CGROUP or $AGENT_SANDBOX_REQ missing; is sandboxd running?)." >&2
+if [ ! -d "$CGROUP" ] || [ ! -d "$REQDIR" ]; then
+	echo "agent-sandbox-exec: sandbox not ready ($CGROUP or $REQDIR missing; is sandboxd running?)." >&2
 	echo "agent-sandbox-exec: refusing to start unprotected. Set AGENT_SANDBOX_INSECURE=1 to bypass." >&2
 	exit 2
 fi
 
-# Ask sandboxd (root) to migrate us into the cgroup; it removes the file when done.
-req="$AGENT_SANDBOX_REQ/$$"
+# Ask sandboxd (root) to migrate us into the cgroup; it removes the request file
+# only after a verified successful migration.
+req="$REQDIR/$$"
 : > "$req"
 i=0
 while [ -e "$req" ] && [ "$i" -lt 150 ]; do

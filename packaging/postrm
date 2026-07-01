@@ -1,12 +1,11 @@
 #!/bin/sh
 # postrm: on purge, disable the unit and clean up runtime state
-# (delegated cgroup if empty, pinned BPF maps created by the daemon).
+# (agent cgroup if empty, pinned BPF maps created by the daemon).
 set -e
 
 if [ "$1" = "purge" ]; then
 	if [ -d /run/systemd/system ]; then
 		systemctl disable agent-sandbox.service || true
-		rm -f /etc/systemd/system/agent-sandbox.service 2>/dev/null || true
 		systemctl daemon-reload || true
 	fi
 	rmdir /sys/fs/cgroup/agent-sandbox 2>/dev/null || true
