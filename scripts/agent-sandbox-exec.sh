@@ -5,8 +5,9 @@
 # cgroup so the BPF-LSM denylist blocks opens of the listed secret files (returns
 # ENOENT). The denylist is the union of the root-controlled base list
 # (/etc/agent-sandbox-exec/denylist) and your home list
-# (~/.config/agent-sandbox-exec/denylist); it is loaded once on first launch
-# and frozen until the daemon is restarted. No namespace is created — the
+# (~/.config/agent-sandbox-exec/denylist); it is re-read on every launch (the
+# request also reloads it) and diff-applied to your cgroup — edits take effect on
+# your next launch, no daemon restart needed. No namespace is created — the
 # command sees the real mount table, /dev ownership, supplementary groups, /proc.
 #
 # Fail-closed is unconditional: if the sandbox isn't ready, the command is NOT
@@ -31,8 +32,10 @@ blocked. The denylist is the union of the root-controlled base list
 (~/.config/agent-sandbox-exec/denylist). No namespace is created -- the command
 sees the real system environment and can troubleshoot normally.
 
-A uid's denylist is loaded on first launch and then frozen; to apply denylist
-changes, restart agent-sandbox-execd.
+A uid's denylist is re-read on every launch and diff-applied to your cgroup, so
+denylist changes take effect on your next launch — no daemon restart needed.
+Restart agent-sandbox-execd only to refresh a sandbox that is already running
+and issues no new launch.
 
 Options:
   -h, --help        Show this help and exit.

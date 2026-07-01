@@ -2,7 +2,7 @@
 
 Findings from peer review (codex pass-2, kimi pass-1) that were NOT fixed in
 the earlier fix batch, with rationale and intended action. The per-uid-cgroup +
-restart-to-refresh redesign (this branch) eliminated M1, M2, M4, M5, M7, and L5;
+ping-driven reload redesign (this branch) eliminated M1, M2, M4, M5, M7, and L5;
 the remaining open items are below.
 
 ## Disputed (verified working here, not bugs on this host)
@@ -72,20 +72,24 @@ the remaining open items are below.
   from `CMAKE_SYSTEM_PROCESSOR` (mapping x86_64→amd64), or fail explicitly on
   unsupported architectures. Only matters if built for non-amd64.
 
-### L4 — `Documentation=` points to a non-installed README
+### L4 — RESOLVED: `Documentation=` now points at the installed man pages
 - **Location:** `scripts/agent-sandbox-execd.service`
-- **Issue:** Unit references `/usr/share/doc/agent-sandbox-exec/README.md`,
-  which the package does not install (only manpages ship).
-- **Action:** Point `Documentation=` at the installed man pages
-  (`man:agent-sandbox-exec(1)`, `man:agent-sandbox-exec-denylist(5)`) or install
-  the README to `/usr/share/doc/agent-sandbox-exec/`.
+- **Was:** Unit referenced `/usr/share/doc/agent-sandbox-exec/README.md`,
+  which the package does not install (only the binary, launcher, unit, denylist
+  example, and the two man pages ship) \(em a 404 in `systemctl status`.
+- **Fix:** `Documentation=man:agent-sandbox-exec(1) man:agent-sandbox-exec-denylist(5)`,
+  both installed. The alternative (install README.md to
+  `/usr/share/doc/agent-sandbox-exec/`) was rejected as additive surface area
+  duplicating the man pages.
 
-## Eliminated by the per-uid + restart-to-refresh redesign
+## Eliminated by the per-uid + ping-driven reload redesign
 
 - **M1** (transient allow-all on reload): `denylist_apply_cgid` now inserts new
   entries before removing stale ones, so the live map always covers the desired
-  set; no clear-then-reinsert window. Reload only happens at daemon restart
-  (no enforcement during restart), so the window is moot anyway.
+  set; no clear-then-reinsert window. Reload is ping-driven (every launch
+  re-reads + diff-applies that uid's list), so the live set is never emptied
+  during an edit; a daemon restart only re-applies for a running sandbox with no
+  new launch (enforcement is down during restart anyway).
 - **M2** (symlink denylist entries): home-list entries are `lstat`-rejected if
   symlinks (user-controlled list, predictability). Base-list entries follow
   symlinks normally (root-controlled).

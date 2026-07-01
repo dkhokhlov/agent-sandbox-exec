@@ -23,20 +23,25 @@ Opens of listed files by sandboxed processes (and every process they spawn) are
 denied by the BPF-LSM program with
 .BR ENOENT .
 .SH "LOADING AND RELOAD"
-A uid's denylist is read
-.I once
-\(em at that uid's first launch, or at daemon startup for already-active uids
-\(em and then
-.I frozen
-until
-.B agent-sandbox-execd
-is restarted. There is no live reload, no inotify watch on the denylists, and
-no polling: to apply any denylist change (base or home), restart the daemon
-.RB ( "systemctl restart agent-sandbox-execd" ).
-On restart, the daemon re-scans existing per-uid cgroups and re-reads every
-active uid's list from disk, so protection for running agents is restored and
-refreshed in one step. NFS home is fine precisely because no inotify events are
-assumed.
+A uid's denylist (base \(cu home) is re-read from disk on
+.I every
+launch request and diff-applied to that uid's cgroup, so an edit takes effect
+on the user's
+.I next
+launch \(em no daemon restart needed and no effect on other uids. This is a
+ping-driven reload (the launcher's migration request also triggers the re-read):
+there is no inotify watch on the denylists and no polling, so an NFS-mounted
+home is fine (no filesystem events are assumed). The apply is an incremental
+diff (new entries inserted first, then stale ones removed), so the live deny set
+is never emptied below the desired set.
+.PP
+A daemon restart
+.RB ( "systemctl restart agent-sandbox-execd" )
+is only needed to refresh the deny set of a uid that has a
+.I running
+sandbox but issues no new launch: on restart the daemon re-scans every existing
+per-uid cgroup, restores the membership gate, and re-reads each uid's list from
+disk.
 .SH FORMAT
 One path per line, in either denylist:
 .PP
@@ -66,9 +71,9 @@ retargets would be a self-surprise. The base list follows symlinks normally
 Matching is by
 .I inode
 .RI ( {cgroup-id, device, inode} ),
-so hardlinks and bind-mounts of a listed file are also blocked. An atomic
-replace of a secret (a new inode) is not re-resolved until the next daemon
-restart.
+so hardlinks and bind-mounts of a listed file are also blocked. Each path is
+re-`stat`'d on every launch, so an atomic replace of a secret (a new inode) is
+picked up on the user's next launch.
 .SH EXAMPLES
 .PP
 .nf
@@ -86,7 +91,8 @@ Only the content read is blocked;
 (metadata) of a listed file still succeeds. A process
 .I outside
 the sandbox opening a secret and passing the fd via a Unix socket can bypass
-this scheme. Denylist changes take effect only after restarting
-.BR agent-sandbox-execd .
+this scheme. Denylist changes take effect on the user's next launch (no
+restart needed); a restart only refreshes a running sandbox that has no new
+launch.
 .SH "SEE ALSO"
 .BR agent-sandbox-exec (1)

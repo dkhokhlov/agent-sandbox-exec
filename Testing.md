@@ -1,12 +1,15 @@
-# agent-sandbox-exec — test matrix (per-uid + restart-to-refresh model)
+# agent-sandbox-exec — test matrix (per-uid + ping-driven reload model)
 
 > **Status: RUN — ALL PASS.** Verified on `mini2` (kernel `6.12.88+deb13-amd64`,
-> LSM list `…,bpf,…`, cgroup v2). `sudo env ASE_UID=owner scripts/test.sh` →
-> 14/14 PASS (single-uid); `sudo env ASE_UID=owner ASE_UID2=ase2 scripts/test.sh`
-> → 18/18 PASS (with cross-uid isolation). The one row not exercised here is
-> **P1** (preflight on a BPF-LSM-absent kernel) — it requires a kernel without
-> `bpf` in the LSM list and is left as a separate manual run; the preflight code
-> path is reviewed in `src/agent-sandbox-execd.c` `preflight_bpf_lsm()`.
+> LSM list `…,bpf,…`, cgroup v2; `/home` is NFS `mini2:/mnt/home`). `sudo env
+> ASE_UID=owner scripts/test.sh` → 16/16 PASS (single-uid); `sudo env
+> ASE_UID=owner ASE_UID2=ase2 scripts/test.sh` → 20/20 PASS (with cross-uid
+> isolation; `ase2` given a local home under `/tmp` because `/home` is NFS
+> root-squashed and root cannot create `/home/ase2`). The one row not exercised
+> here is **P1** (preflight on a BPF-LSM-absent kernel) — it requires a kernel
+> without `bpf` in the LSM list and is left as a separate manual run; the
+> preflight code path is reviewed in `src/agent-sandbox-execd.c`
+> `preflight_bpf_lsm()`.
 
 ## Environment (verified run)
 
@@ -22,8 +25,9 @@
   `systemd-run` (spawns under `system.slice`).
 - `scripts/test.sh` resets `uid-<ASE_UID>` to a clean "not yet loaded" state at
   Phase B entry (stop daemon → rmdir the per-uid cgroup → start), so D1's
-  first-launch-load path is deterministic on re-runs (the per-uid cgroup
-  otherwise persists across restarts and the uid would be frozen-already-loaded).
+  first-launch path is deterministic on re-runs (the per-uid cgroup otherwise
+  persists across restarts, so D1 would exercise only the re-read path, not
+  cgroup creation).
 
 ## Build artifacts (Phase A, no root)
 
@@ -43,14 +47,15 @@
 | D3 | hardlink to secret | blocked (same inode) | PASS |
 | D4 | env transparency: supplementary groups | inside == outside | PASS |
 | D5 | env transparency: `/proc/1/comm` readable | real pid 1 visible | PASS |
-| D6 | env transparency: `/dev/nvidia0` owner (if present) | uid 0 (real) | N/A (no `/dev/nvidia0` on mini2) |
+| D6 | env transparency: `/dev/nvidia0` owner (if present) | uid 0 (real) | PASS (uid 0) |
 
-## Restart-to-refresh (the systemd-style reload contract)
+## Reload (ping-driven + restart re-scan)
 
 | # | Test | Expected | Result |
 |---|------|----------|--------|
-| R1 | add a new entry to a uid's home denylist while that uid is already loaded; launch | NOT denied (list frozen) | PASS |
-| R2 | `systemctl restart agent-sandbox-execd`; launch | new entry → ENOENT (re-scan re-loaded it) | PASS |
+| R1 | uid already loaded; add entry to home list; launch (NO restart) | ENOENT — list re-read on every launch (#5 ping-driven reload) | PASS |
+| R2 | remove that entry from home list; launch (NO restart) | allowed — diff-apply purged the stale key | PASS |
+| R3 | re-add entry; `systemctl restart agent-sandbox-execd`; launch | ENOENT — re-scan re-applied it | PASS |
 
 ## Cross-uid isolation (optional, requires `ASE_UID2`)
 
@@ -86,8 +91,10 @@
 - `MAX_DENY` per uid is 1024 with a loud truncation log; `deny_map` is 65536
   with `BPF_F_NO_PREALLOC` and a loud per-entry failure log on map-full.
 - Incremental diff-apply (insert-then-remove-stale) closes the M1 transient
-  allow window; reload only happens at restart, when enforcement is down
-  anyway.
+  allow window. Reload is ping-driven (every launch re-reads + diff-applies that
+  uid's list), so the live set is never emptied during an edit; a daemon restart
+  only re-applies for a running sandbox with no new launch (enforcement is down
+  during restart anyway).
 - pid-reuse mitigation: the request file's owner uid must equal the target
   pid's real uid (`/proc/<pid>/status`), or the request is rejected.
 - Still-applicable caveats: M3 (request-dir failure not yet fatal), H4 (HASH

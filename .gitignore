@@ -3,3 +3,4 @@
 *.skel.h
 /vmlinux.h
 *.deb
+/.opencode
