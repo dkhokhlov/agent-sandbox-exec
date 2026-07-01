@@ -1,6 +1,6 @@
 [Unit]
 Description=agent-sandbox-exec: BPF-LSM file-read denylist for CLI agents
-Documentation=file:///usr/share/doc/agent-sandbox-exec/README.md
+Documentation=man:agent-sandbox-exec(1) man:agent-sandbox-exec-denylist(5)
 # Needs kernel BTF for CO-RE and cgroup v2.
 ConditionPathIsDirectory=/sys/kernel/btf
 ConditionPathIsDirectory=/sys/fs/cgroup

@@ -13,9 +13,14 @@
 //     (~/.config/agent-sandbox-exec/denylist) to that uid's cgroup only — a
 //     user-controlled home denylist is safe because per-cgid scoping confines
 //     it to the user's own sandbox (cross-user isolation),
-//   * on restart, re-scans existing uid-* children so protection is restored
-//     and lists are refreshed from disk (systemd-style: restart to apply
-//     denylist changes; lists are otherwise frozen after first load),
+//   * on EVERY launch request, re-reads that uid's list (base ∪ home) from
+//     disk and diff-applies it to the uid's cgid, so denylist edits take
+//     effect on the next launch with no daemon restart (the #5 ping-driven
+//     reload — safe because a deny list is self-restriction scoped to the
+//     owner's own cgid, so live-updating that cgid only affects the owner's
+//     own sandboxed processes). A restart re-scan remains as a
+//     belt-and-suspenders refresh for a uid with a running sandbox but no
+//     new launch,
 //   * migrates launcher pids into their uid's cgroup on request via
 //     /run/agent-sandbox-exec/req (the only inotify watched path).
 //
@@ -67,8 +72,8 @@
 static int g_ifd = -1;
 static int g_req_wd = -1;	/* watch on /run/agent-sandbox-exec/req only */
 
-/* Per-uid sandbox state. A uid's list is loaded once (first request or restart
- * re-scan) and then frozen until the daemon restarts. */
+/* Per-uid sandbox state. A uid's list is re-read from disk on every launch
+ * request (and at restart re-scan) and diff-applied to its cgid. */
 struct uid_state {
 	uid_t uid;
 	__u64 cgid;
@@ -341,8 +346,14 @@ static int find_uid(uid_t uid)
 }
 
 /* Ensure the per-uid sandbox cgroup exists, track it, and (re)load its deny
- * list from disk. Returns the cgroup id, or 0 on failure. Idempotent: a
- * repeated call for an already-loaded uid is a no-op (the list is frozen). */
+ * list from disk. Returns the cgroup id, or 0 on failure. On every request the
+ * uid's list (base ∪ home) is re-read from disk and diff-applied to its cgid,
+ * so denylist edits take effect on the next launch with no daemon restart (the
+ * #5 ping-driven reload). The cgid is stable for the life of this daemon, so
+ * this live-updates the deny set for that cgid (shared by any concurrent
+ * sandboxes of the same uid) — safe because a deny list is self-restriction
+ * scoped to the owner's own cgid only. The restart re-scan path is the same
+ * function applied to every existing uid at start. */
 static __u64 ensure_per_uid_cgroup(struct agent_sandbox_bpf *skel, uid_t uid)
 {
 	char cgpath[PATH_MAX];
@@ -351,8 +362,13 @@ static __u64 ensure_per_uid_cgroup(struct agent_sandbox_bpf *skel, uid_t uid)
 	int idx, npaths;
 
 	idx = find_uid(uid);
-	if (idx >= 0)
-		return g_uids[idx].cgid;		/* frozen: do not re-read */
+	if (idx >= 0) {
+		/* #5 ping-driven reload: re-read on every request and diff-apply
+		 * to the (stable) cgid so edits land on the next launch. */
+		npaths = load_uid_list(uid, MAX_DENY);
+		denylist_apply_cgid(skel, g_uids[idx].cgid, npaths);
+		return g_uids[idx].cgid;
+	}
 
 	if (g_nuids >= MAX_UIDS) {
 		fprintf(stderr, "agent-sandbox-execd: uid cap reached (%d), cannot sandbox uid %u\n",
@@ -403,8 +419,11 @@ static __u64 ensure_per_uid_cgroup(struct agent_sandbox_bpf *skel, uid_t uid)
 }
 
 /* Scan existing uid-* children of the parent cgroup and (re)load each. This is
- * the restart path: it restores protection for already-running sandboxes and
- * refreshes every uid's list from disk (the systemd-style reload contract). */
+ * the restart path: it restores the membership gate + deny set for already-
+ * running sandboxes, and re-reads every uid's list from disk. Under the #5
+ * ping-driven reload model a uid's list is already re-read on each launch, so
+ * this is mainly a belt-and-suspenders refresh for a uid whose sandbox is
+ * running but has had no new launch since its list edit. */
 static void rescan_uids(struct agent_sandbox_bpf *skel)
 {
 	DIR *d = opendir(CGROUP_PATH);
@@ -672,8 +691,10 @@ int main(void)
 		fprintf(stderr, "agent-sandbox-execd: WARNING: request dir not ready; "
 				"agents cannot be sandboxed\n");
 
-	/* Restore protection for already-running sandboxes and refresh lists
-	 * from disk (the restart-to-refresh path). */
+	/* Restore the membership gate for already-running sandboxes and re-apply
+	 * their lists from disk (the restart re-scan path; under the #5
+	 * ping-driven reload a uid's list is already re-read on each launch, so
+	 * this mainly refreshes a sandbox with no new launch since its edit). */
 	rescan_uids(skel);
 
 	/* Watch the request dir only — the migration IPC. No denylist watching,

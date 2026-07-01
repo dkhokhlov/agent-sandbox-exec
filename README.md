@@ -13,7 +13,7 @@ works; only content reads are blocked.
 | piece | role |
 |---|---|
 | `agent_sandbox.bpf.o` | BPF-LSM program on `lsm/file_open`. For tasks in a tracked per-uid sandbox cgroup, returns `-ENOENT` if the opened inode is in `deny_map` for that cgroup; inert for everyone else. |
-| `agent-sandbox-execd` (root, systemd) | Loads + attaches the BPF program, owns `deny_map` (keyed `{cgid, dev, ino}`) and `agent_cgid_set` (the tracked sandbox cgroups). Ensures the parent cgroup, creates a per-uid child on first request, applies the union of the base list and that uid's home list to that uid's cgroup, and migrates launcher requests into it. No live reload: restart to refresh. |
+| `agent-sandbox-execd` (root, systemd) | Loads + attaches the BPF program, owns `deny_map` (keyed `{cgid, dev, ino}`) and `agent_cgid_set` (the tracked sandbox cgroups). Ensures the parent cgroup, creates a per-uid child on first request, re-reads the union of the base list and that uid's home list on **every** launch and diff-applies it to that uid's cgroup, and migrates launcher requests into it. No inotify/mtime-watching on the denylists: edits land on the next launch; restart only to refresh a running sandbox that has no new launch. |
 | `agent-sandbox-exec` (user) | Launcher: asks `agent-sandbox-execd` to migrate its pid into its per-uid cgroup, then execs the real agent. Unprivileged. |
 
 Scope is a **per-uid cgroup**: each sandboxed uid joins
@@ -72,17 +72,24 @@ Two denylists are applied as a union per sandboxed uid:
 /home/owner/.ssh/id_rsa
 /home/owner/.aws/credentials
 ```
-A uid's list is loaded **once** (on first launch, or at daemon restart for
-already-active uids) and then frozen. There is no live reload — to apply any
-denylist change, restart the daemon:
+A uid's list (base ∪ home) is **re-read from disk on every launch** and
+diff-applied to that uid's cgroup, so edits take effect on the user's **next
+launch** — no daemon restart needed, no effect on other uids. This is a
+ping-driven reload (the launcher's existing migration request to the daemon
+also triggers the re-read), not inotify/mtime-watching, so an NFS-mounted home
+is fine (no filesystem events are assumed). A non-existent, non-regular, or
+(home list) symlink path is skipped with a warning.
+
+A daemon restart is still useful in one case: to refresh the deny set of a uid
+that has a **running** sandbox but issues no new launch — `systemctl restart
+agent-sandbox-execd` re-scans every `uid-*` cgroup and re-applies each list
+(also restoring the membership gate after a restart):
 ```
 sudo systemctl restart agent-sandbox-execd
 ```
-On restart the daemon re-scans existing per-uid cgroups and re-reads every
-active uid's list from disk, restoring + refreshing protection in one step
-(no inotify on the denylists; NFS home is fine because no events are assumed).
-A non-existent, non-regular, or (home list) symlink path is skipped with a
-warning.
+Because each uid's list is re-read on every request, the apply is an
+incremental diff (insert new entries, then remove stale ones), so the live map
+never drops below the desired set.
 
 ## Wire up agents
 
@@ -98,24 +105,26 @@ Do the same for `~/bin/codex`.
 
 `sudo scripts/test.sh` checks: secret `open` → `ENOENT`; `cat|pipe` and
 hardlink blocked; supplementary groups, `/proc` pid 1, and `/dev/nvidia0`
-ownership unchanged; restart-to-refresh; optional cross-uid isolation (set
-`ASE_UID2`); fail-closed. Manual spot-check (as your own uid, not root):
+ownership unchanged; ping-driven reload (add/remove take effect on the next
+launch, no restart); restart still re-applies; optional cross-uid isolation
+(set `ASE_UID2`); fail-closed. Manual spot-check (as your own uid, not root):
 ```
 mkdir -p ~/.config/agent-sandbox-exec
 echo /tmp/secret >> ~/.config/agent-sandbox-exec/denylist
 agent-sandbox-exec sh -c 'cat /proc/self/cgroup'   # -> 0::/agent-sandbox-exec/uid-<uid>
 agent-sandbox-exec cat /tmp/secret                 # -> No such file or directory
-# edit the home list, then apply:
-sudo systemctl restart agent-sandbox-execd
+# edits apply on the next launch — no restart needed:
+echo /tmp/other >> ~/.config/agent-sandbox-exec/denylist
+agent-sandbox-exec cat /tmp/other                 # -> No such file or directory
 ```
 
 ## Caveats
 
 - **Files only, no directories/globs.** (Directories would need `bpf_d_path` +
   string matching — out of scope.)
-- **Inode-based.** An atomic replace (new inode) is **not** re-resolved until
-  the next daemon restart (no per-secret watcher). Static secrets are
-  unaffected.
+- **Inode-based.** Each listed path is re-`stat`'d on every launch, so an
+  atomic replace (new inode) is picked up on the user's next launch (no
+  per-secret watcher, no restart needed).
 - **Passed-fd exfil.** A process *outside* the cgroup opening a secret and
   passing the fd via a Unix socket bypasses any open-based scheme. Low threat.
 - **`stat` works** on secrets (metadata visible); only content reads are blocked.
@@ -123,9 +132,10 @@ sudo systemctl restart agent-sandbox-execd
   cgroup/req-dir aren't ready, the launcher refuses to start the agent (exit 2).
   There is no escape-hatch env var; to run unsandboxed, invoke the command
   directly.
-- **Restart to refresh.** Denylist changes (base or home) take effect only
-  after `systemctl restart agent-sandbox-execd`. A running sandbox keeps its
-  frozen list until then.
+- **Reload = next launch.** Denylist edits (base or home) take effect on the
+  user's next launch (the request re-reads the list and diff-applies it); a
+  daemon restart is only needed to refresh a **running** sandbox that issues no
+  new launch. The apply is an incremental diff, so the live set is never emptied.
 - **Enforcement = daemon alive.** The BPF is attached while `agent-sandbox-execd`
   runs (`Restart=on-failure`). Pinned maps keep the deny data + cgroup membership
   across restarts; the daemon re-scans and re-applies on start.

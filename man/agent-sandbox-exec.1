@@ -71,12 +71,56 @@ executed (exit 2). There is no escape-hatch environment variable: to run a
 command without the sandbox, invoke it directly rather than through this
 wrapper.
 .PP
-A uid's denylist is loaded on first launch and then
-.I frozen
-until
+A uid's denylist is re-read from disk on every launch and diff-applied to that
+uid's cgroup, so denylist changes (base or home) take effect on the user's next
+launch \(em no daemon restart needed. A restart
+.RB ( "systemctl restart agent-sandbox-execd" )
+only refreshes a uid that has a running sandbox but no new launch.
+.SH PROTOCOL
+The wrapper cannot migrate the process itself \(em
+.I cgroup.procs
+is root-owned. It performs a one-file handshake with
 .B agent-sandbox-execd
-is restarted. To apply denylist changes (base or home), restart the daemon
-.RB ( "systemctl restart agent-sandbox-execd" ).
+(the root daemon) over
+.IR /run/agent-sandbox-exec/req :
+.IP 1. 4
+The wrapper creates an empty request file named after its own PID in that
+directory (a root-owned, world-writable, sticky directory). The filename \(em
+the PID \(em is the payload: it is the process the daemon must migrate.
+.IP 2. 4
+.B agent-sandbox-execd
+watches the directory with
+.BR inotify (7)
+and, for each request, reads the target's real uid from
+.IR /proc/<pid>/status .
+It rejects root and requires the request file's owner
+.RI ( st_uid )
+to equal that real uid. This closes a pid-reuse race: if the requester pid
+died and its number was reused by a different uid, the file's owner will not
+match
+.IR /proc .
+A user can therefore migrate only their own processes.
+.IP 3. 4
+The daemon re-reads that uid's denylist (base \(cu home) from disk and
+diff-applies it to the uid's cgroup, then migrates the pid into
+.IR /sys/fs/cgroup/agent-sandbox-exec/uid-<uid>/cgroup.procs .
+The same request that asks for migration also reloads the denylist (the
+ping-driven reload), so there is no separate reload channel and no inotify
+watch on the denylists.
+.IP 4. 4
+The daemon removes the request file only after a verified successful
+migration. Its disappearance is the wrapper's success signal: the wrapper
+polls for it (up to ~1.5 s). If the file remains, migration failed or timed
+out and the wrapper fails closed (exit 2; the command is not executed).
+.PP
+The daemon does not trust the wrapper. Identity and authorization are
+re-derived from
+.I /proc
+and the request file's owner; denial is enforced by the kernel BPF-LSM hook
+(returning
+.BR ENOENT ),
+not reported by the wrapper. A user can only migrate their own processes,
+and deny entries are scoped to that user's own cgroup.
 .SH FILES
 .TP
 .I /etc/agent-sandbox-exec/denylist
@@ -85,6 +129,12 @@ Root-controlled base denylist, applied to every sandboxed uid \(em see
 .TP
 .I ~/.config/agent-sandbox-exec/denylist
 Per-user home denylist (NFS-safe); unioned with the base list for that uid.
+.TP
+.I /run/agent-sandbox-exec/req
+Root-owned, world-writable, sticky directory holding one-shot migration
+request files named by the launcher's PID \(em see
+.B PROTOCOL
+above.
 .TP
 .I /sys/fs/cgroup/agent-sandbox-exec
 Parent cgroup (root-owned, not delegated); per-uid children

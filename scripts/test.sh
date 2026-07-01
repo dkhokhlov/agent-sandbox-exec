@@ -3,7 +3,7 @@
 #
 # Phase A (no root): the built BPF object has the expected program + maps.
 # Phase B (root + agent-sandbox-execd running + launcher installed): per-uid
-#   deny semantics, env transparency, restart-to-refresh, optional cross-uid
+#   deny semantics, env transparency, ping-driven reload (add/remove/restart),
 #   isolation, cgroup non-delegation, and fail-closed.
 #
 # Run unprivileged for Phase A (`make test`); run `sudo scripts/test.sh` after
@@ -78,18 +78,19 @@ TEST_HOME=$(home_of "$ASE_UID")
 HOME_DENY="$TEST_HOME/.config/agent-sandbox-exec/denylist"
 
 # Reset ASE_UID (and ASE_UID2 if set) to a clean "not yet loaded" state so D1
-# exercises the true first-launch-load path (cgroup created + list read on the
-# first request). The per-uid cgroup persists across daemon restarts — the
-# daemon re-scans uid-* dirs at start and freezes each uid's list — so without
-# this reset a re-run finds ASE_UID already loaded with a frozen list and D1
-# fails spuriously. The cgroup is empty between runs (every sandboxed proc has
-# exited), so rmdir succeeds; if it doesn't (stray proc), D1 may fail and
-# surface that. Stale cgids left in agent_cgid_set are inert orphans (no proc
-# in the deleted cgroup) and the new cgroup gets a fresh cgid.
+# exercises the true first-launch path (cgroup created on the first request).
+# The per-uid cgroup persists across daemon restarts (the daemon re-scans uid-*
+# dirs at start), so without this reset a re-run finds ASE_UID already loaded
+# and D1 would test only the re-read path, not cgroup creation. The cgroup is
+# empty between runs (every sandboxed proc has exited), so rmdir succeeds; if it
+# doesn't (stray proc), D1 may fail and surface that. Stale cgids left in
+# agent_cgid_set are inert orphans (no proc in the deleted cgroup) and the new
+# cgroup gets a fresh cgid.
 ASE_UID_NUM=$(id -u "$ASE_UID")
 systemctl stop agent-sandbox-execd 2>/dev/null || true
 rmdir "$CGROUP/uid-$ASE_UID_NUM" 2>/dev/null || true
 [ -n "$ASE_UID2" ] && rmdir "$CGROUP/uid-$(id -u "$ASE_UID2")" 2>/dev/null || true
+systemctl reset-failed agent-sandbox-execd 2>/dev/null || true	# clear systemd start-rate-limit (rapid stop/start cycles)
 systemctl start agent-sandbox-execd
 sleep 0.4
 
@@ -105,13 +106,14 @@ cleanup() {
 	strip_temps "$BASE_DENYLIST"
 	strip_temps "$HOME_DENY2" 2>/dev/null || true
 	rm -f /tmp/asb_* 2>/dev/null || true
+	systemctl reset-failed agent-sandbox-execd 2>/dev/null || true
 	systemctl start agent-sandbox-execd 2>/dev/null || true
 }
 trap cleanup EXIT
 
-# first-launch-load: adding to the home denylist + launching a NEW sandbox
-# denies it on first request. No restart, no sleep — the list is read at the
-# request (and then frozen until restart).
+# first-launch: adding to the home denylist + launching a NEW sandbox denies
+# it on first request. No restart, no sleep — the list is read at the request
+# (and re-read on every later request: the #5 ping-driven reload).
 grep -q "^$SECRET\$" "$HOME_DENY" 2>/dev/null || printf '%s\n' "$SECRET" >> "$HOME_DENY"
 
 # direct read -> ENOENT
@@ -146,23 +148,35 @@ if [ -e /dev/nvidia0 ]; then
 	[ "$OW" = "0" ] && pass "/dev/nvidia0 real owner (uid 0)" || fail "/dev/nvidia0 owner wrong ($OW)"
 fi
 
-# restart-to-refresh: editing the home list does NOT affect already-loaded uids
-# (frozen) until the daemon restarts; after restart, new launches deny it.
+# ping-driven reload (#5): a uid's list (base ∪ home) is re-read on EVERY
+# launch and diff-applied to its cgid, so edits take effect on the next launch
+# with NO daemon restart. ASE_UID is already loaded from D1 above.
 SECRET2=$(mktemp /tmp/asb_XXXXXX)
-echo "FROZEN-$(head -c16 /dev/urandom | base64)" > "$SECRET2"
+echo "RELOAD-$(head -c16 /dev/urandom | base64)" > "$SECRET2"
 chmod 644 "$SECRET2"	# world-readable: BPF ENOENT must be the discriminator, not EACCES
-printf '%s\n' "$SECRET2" >> "$HOME_DENY"	# ASE_UID already loaded above -> frozen out
+# R1: add entry while already loaded -> next launch denies it (no restart).
+printf '%s\n' "$SECRET2" >> "$HOME_DENY"
 if as_uid "$LAUNCHER" cat "$SECRET2" >/tmp/asb_out2 2>/tmp/asb_err2; then
-	pass "pre-restart: new home entry not denied (list frozen until restart)"
+	fail "ping-reload: new home entry allowed (should be denied on next launch, no restart)"
 else
-	fail "pre-restart: new home entry denied too early (should be frozen)"
+	grep -qi "no such file" /tmp/asb_err2 && pass "ping-reload: new home entry -> ENOENT (no restart needed)" || fail "ping-reload wrong error: $(cat /tmp/asb_err2)"
 fi
+# R2: remove the entry -> next launch allows it (diff-apply purged the stale key).
+sed -i "\|^$SECRET2\$|d" "$HOME_DENY"
+if as_uid "$LAUNCHER" cat "$SECRET2" >/tmp/asb_out2 2>/tmp/asb_err2; then
+	pass "ping-reload: removed entry -> allowed (stale key purged, no restart)"
+else
+	fail "ping-reload: removed entry still denied (stale key not purged)"
+fi
+# R3: restart still refreshes (re-scan re-applies). Re-add, restart, deny.
+printf '%s\n' "$SECRET2" >> "$HOME_DENY"
+systemctl reset-failed agent-sandbox-execd 2>/dev/null || true
 systemctl restart agent-sandbox-execd
 sleep 0.5
 if as_uid "$LAUNCHER" cat "$SECRET2" >/tmp/asb_out2 2>/tmp/asb_err2; then
-	fail "post-restart: new home entry still allowed (re-scan should have loaded it)"
+	fail "post-restart: entry still allowed (re-scan should have re-applied)"
 else
-	grep -qi "no such file" /tmp/asb_err2 && pass "post-restart: new home entry -> ENOENT (restart refreshed)" || fail "post-restart wrong error: $(cat /tmp/asb_err2)"
+	grep -qi "no such file" /tmp/asb_err2 && pass "post-restart: entry -> ENOENT (re-scan re-applied)" || fail "post-restart wrong error: $(cat /tmp/asb_err2)"
 fi
 
 # cross-uid isolation (optional): a second uid's home list must not affect the
