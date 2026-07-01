@@ -97,8 +97,9 @@ sleep 0.4
 SECRET=$(mktemp /tmp/asb_XXXXXX)
 echo "TOPSECRET-$(head -c16 /dev/urandom | base64)" > "$SECRET"
 # world-readable so the launching uid's POSIX inode_permission succeeds and the
-# BPF-LSM deny (ENOENT) is the sole discriminator; inode_permission runs before
-# security_file_open, so a 600 root-owned secret would EACCES before the hook.
+# BPF-LSM deny (EPERM) is the sole discriminator; inode_permission runs before
+# security_file_open, so a 600 root-owned secret would EACCES before the hook
+# (distinct errno: mode bits -> EACCES, denylist -> EPERM).
 chmod 644 "$SECRET"
 mkdir -p "$(dirname "$HOME_DENY")"
 cleanup() {
@@ -116,11 +117,11 @@ trap cleanup EXIT
 # (and re-read on every later request: the #5 ping-driven reload).
 grep -q "^$SECRET\$" "$HOME_DENY" 2>/dev/null || printf '%s\n' "$SECRET" >> "$HOME_DENY"
 
-# direct read -> ENOENT
+# direct read -> EPERM
 if as_uid "$LAUNCHER" cat "$SECRET" >/tmp/asb_out 2>/tmp/asb_err; then
 	fail "cat secret succeeded (should be denied)"
 else
-	grep -qi "no such file" /tmp/asb_err && pass "cat secret -> ENOENT" || fail "cat secret denied, wrong error: $(cat /tmp/asb_err)"
+	grep -qi "operation not permitted" /tmp/asb_err && pass "cat secret -> EPERM" || fail "cat secret denied, wrong error: $(cat /tmp/asb_err)"
 fi
 
 # delegation via child + pipe -> still blocked
@@ -153,13 +154,13 @@ fi
 # with NO daemon restart. ASE_UID is already loaded from D1 above.
 SECRET2=$(mktemp /tmp/asb_XXXXXX)
 echo "RELOAD-$(head -c16 /dev/urandom | base64)" > "$SECRET2"
-chmod 644 "$SECRET2"	# world-readable: BPF ENOENT must be the discriminator, not EACCES
+chmod 644 "$SECRET2"	# world-readable: BPF EPERM must be the discriminator, not EACCES
 # R1: add entry while already loaded -> next launch denies it (no restart).
 printf '%s\n' "$SECRET2" >> "$HOME_DENY"
 if as_uid "$LAUNCHER" cat "$SECRET2" >/tmp/asb_out2 2>/tmp/asb_err2; then
 	fail "ping-reload: new home entry allowed (should be denied on next launch, no restart)"
 else
-	grep -qi "no such file" /tmp/asb_err2 && pass "ping-reload: new home entry -> ENOENT (no restart needed)" || fail "ping-reload wrong error: $(cat /tmp/asb_err2)"
+	grep -qi "operation not permitted" /tmp/asb_err2 && pass "ping-reload: new home entry -> EPERM (no restart needed)" || fail "ping-reload wrong error: $(cat /tmp/asb_err2)"
 fi
 # R2: remove the entry -> next launch allows it (diff-apply purged the stale key).
 sed -i "\|^$SECRET2\$|d" "$HOME_DENY"
@@ -176,7 +177,7 @@ sleep 0.5
 if as_uid "$LAUNCHER" cat "$SECRET2" >/tmp/asb_out2 2>/tmp/asb_err2; then
 	fail "post-restart: entry still allowed (re-scan should have re-applied)"
 else
-	grep -qi "no such file" /tmp/asb_err2 && pass "post-restart: entry -> ENOENT (re-scan re-applied)" || fail "post-restart wrong error: $(cat /tmp/asb_err2)"
+	grep -qi "operation not permitted" /tmp/asb_err2 && pass "post-restart: entry -> EPERM (re-scan re-applied)" || fail "post-restart wrong error: $(cat /tmp/asb_err2)"
 fi
 
 # cross-uid isolation (optional): a second uid's home list must not affect the

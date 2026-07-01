@@ -3,7 +3,7 @@
 #
 # Files the sandboxed agents (claude / codex / kimi / glm) must NOT read, nor
 # any subprocess they spawn (cat | pipe, hardlinks, cp source -- all blocked at
-# open by the BPF-LSM, returning ENOENT).
+# open by the BPF-LSM, returning EPERM).
 #
 # Format:
 #   - one absolute path per line

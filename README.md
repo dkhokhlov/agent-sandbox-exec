@@ -5,14 +5,19 @@ BPF-LSM file-read denylist for interactive CLI agents (`claude`, `codex`,
 opening a small list of secret files, while leaving the rest of the environment
 **completely real** so the agent can still troubleshoot kernel/system issues.
 
-Denied opens return `ENOENT` (tools treat the file as absent). `stat` still
-works; only content reads are blocked.
+Denied opens return `EPERM` ("Operation not permitted"). `stat` still works;
+only content reads are blocked. `EPERM` is the conventional errno for a
+security-policy denial, and it is distinct from `EACCES`, which the kernel's
+own mode-bit check returns before the hook fires — so an agent that `ls`-es a
+listed file and then gets `EPERM` on `open` reads it as "a policy is blocking
+me," not as a broken inode / filesystem quirk (which `ENOENT` on a visible
+dirent would imply).
 
 ## How it works
 
 | piece | role |
 |---|---|
-| `agent_sandbox.bpf.o` | BPF-LSM program on `lsm/file_open`. For tasks in a tracked per-uid sandbox cgroup, returns `-ENOENT` if the opened inode is in `deny_map` for that cgroup; inert for everyone else. |
+| `agent_sandbox.bpf.o` | BPF-LSM program on `lsm/file_open`. For tasks in a tracked per-uid sandbox cgroup, returns `-EPERM` if the opened inode is in `deny_map` for that cgroup; inert for everyone else. |
 | `agent-sandbox-execd` (root, systemd) | Loads + attaches the BPF program, owns `deny_map` (keyed `{cgid, dev, ino}`) and `agent_cgid_set` (the tracked sandbox cgroups). Ensures the parent cgroup, creates a per-uid child on first request, re-reads the union of the base list and that uid's home list on **every** launch and diff-applies it to that uid's cgroup, and migrates launcher requests into it. No inotify/mtime-watching on the denylists: edits land on the next launch; restart only to refresh a running sandbox that has no new launch. |
 | `agent-sandbox-exec` (user) | Launcher: asks `agent-sandbox-execd` to migrate its pid into its per-uid cgroup, then execs the real agent. Unprivileged. |
 
@@ -42,14 +47,14 @@ make deps          # apt install clang llvm libelf-dev libbpf-dev bpftool
 Build + package (unprivileged):
 ```
 make build         # cmake + clang -target bpf + bpftool skeleton + agent-sandbox-execd
-make package       # -> build/agent-sandbox-exec_0.1.1_amd64.deb
+make package       # -> build/agent-sandbox-exec_0.1.2_amd64.deb
 make test          # Phase A (no root): object has deny_map + file_open
 ```
 
 ## Deploy
 
 ```
-sudo apt install ./build/agent-sandbox-exec-0.1.0-Linux.deb
+sudo apt install ./build/agent-sandbox-exec_0.1.2_amd64.deb
 ```
 The postinst enables + starts `agent-sandbox-execd.service`. Verify:
 ```
@@ -103,7 +108,7 @@ Do the same for `~/bin/codex`.
 
 ## Verify (end-to-end)
 
-`sudo scripts/test.sh` checks: secret `open` → `ENOENT`; `cat|pipe` and
+`sudo scripts/test.sh` checks: secret `open` → `EPERM`; `cat|pipe` and
 hardlink blocked; supplementary groups, `/proc` pid 1, and `/dev/nvidia0`
 ownership unchanged; ping-driven reload (add/remove take effect on the next
 launch, no restart); restart still re-applies; optional cross-uid isolation
@@ -112,10 +117,10 @@ launch, no restart); restart still re-applies; optional cross-uid isolation
 mkdir -p ~/.config/agent-sandbox-exec
 echo /tmp/secret >> ~/.config/agent-sandbox-exec/denylist
 agent-sandbox-exec sh -c 'cat /proc/self/cgroup'   # -> 0::/agent-sandbox-exec/uid-<uid>
-agent-sandbox-exec cat /tmp/secret                 # -> No such file or directory
+agent-sandbox-exec cat /tmp/secret                 # -> cat: /tmp/secret: Operation not permitted
 # edits apply on the next launch — no restart needed:
 echo /tmp/other >> ~/.config/agent-sandbox-exec/denylist
-agent-sandbox-exec cat /tmp/other                 # -> No such file or directory
+agent-sandbox-exec cat /tmp/other                 # -> cat: /tmp/other: Operation not permitted
 ```
 
 ## Caveats

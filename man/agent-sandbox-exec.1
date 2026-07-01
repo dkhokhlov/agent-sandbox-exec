@@ -1,4 +1,4 @@
-.TH AGENT-SANDBOX-EXEC 1 "2026-07-01" "agent-sandbox-exec 0.1.1" "User Commands"
+.TH AGENT-SANDBOX-EXEC 1 "2026-07-01" "agent-sandbox-exec 0.1.2" "User Commands"
 .SH NAME
 agent-sandbox-exec \- run a command inside the BPF-LSM agent sandbox
 .SH SYNOPSIS
@@ -17,7 +17,7 @@ spawns is migrated into a per-uid agent cgroup
 where a BPF-LSM program on the
 .I file_open
 hook blocks opens of the files listed in the denylist, returning
-.BR ENOENT .
+.BR EPERM .
 .PP
 The effective denylist for a uid is the union of the root-controlled base list
 .RI ( /etc/agent-sandbox-exec/denylist )
@@ -116,11 +116,18 @@ out and the wrapper fails closed (exit 2; the command is not executed).
 The daemon does not trust the wrapper. Identity and authorization are
 re-derived from
 .I /proc
-and the request file's owner; denial is enforced by the kernel BPF-LSM hook
-(returning
-.BR ENOENT ),
+and the request file's owner; denial is enforced by the kernel BPF-LSM hook,
 not reported by the wrapper. A user can only migrate their own processes,
 and deny entries are scoped to that user's own cgroup.
+.PP
+The hook returns
+.B EPERM
+("Operation not permitted"), the conventional errno for a security-policy
+denial. It is distinct from
+.BR EACCES ,
+which the kernel's own mode-bit check returns before the hook fires, so a
+denied open is unambiguously the denylist rather than an ordinary permissions
+error.
 .SH FILES
 .TP
 .I /etc/agent-sandbox-exec/denylist

@@ -6,8 +6,13 @@
 // sandbox cgroup. Deny entries are keyed (cgid, device, inode): the cgid
 // prefix scopes a user's denylist to that user's own sandbox cgroup, so a
 // user-controlled home denylist can only block opens inside the user's own
-// sandbox (cross-user isolation). Denied opens return -ENOENT so that tools
-// treat the file as absent rather than hitting a permissions error.
+// sandbox (cross-user isolation). Denied opens return -EPERM: "Operation not
+// permitted" is the conventional errno for a security-policy denial (vs -EACCES
+// for file-mode denial), so a sandboxed agent that sees the dirent via ls but
+// gets EPERM on open reads it as "a policy is blocking me" instead of mistaking
+// an ENOENT-on-a-visible-dirent for a broken inode / filesystem quirk. The
+// kernel's own mode-bit check (inode_permission) runs before this hook and
+// returns -EACCES, so EPERM stays a unique signal that the denylist fired.
 //
 // Scope: completely inert for every process not in a tracked per-uid sandbox
 // cgroup (single HASH membership lookup on agent_cgid_set) -> zero system
@@ -19,11 +24,13 @@
 #include <bpf/bpf_core_read.h>
 #include "agent_sandbox.h"
 
-#define ENOENT 2
+#define EPERM 1
 
 /* Deny errno — the single knob for deny behavior. Negative value returned from
- * the LSM hook becomes the open(2) errno. */
-#define DENY_ERRNO (-ENOENT)
+ * the LSM hook becomes the open(2) errno. EPERM ("Operation not permitted")
+ * signals a security-policy denial; it is distinct from EACCES, which the
+ * kernel's mode-bit check already returns before this hook fires. */
+#define DENY_ERRNO (-EPERM)
 
 /* struct deny_key is defined in the shared header agent_sandbox.h. */
 
