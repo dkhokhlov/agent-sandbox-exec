@@ -15,7 +15,7 @@
 
 - Kernel: `6.12.88+deb13-amd64`, `CONFIG_BPF_LSM=y`, `bpf` active in
   `/sys/kernel/security/lsm`, cgroup v2 at `/sys/fs/cgroup`.
-- Daemon: `agent-sandbox-execd` 0.1.1 as root via systemd `Type=notify`,
+- Daemon: `agent-sandbox-execd` 0.1.2 as root via systemd `Type=notify`,
   `Restart=on-failure`; pinned maps at `/sys/fs/bpf/{deny_map,agent_cgid_set}`.
 - Test uid: `ASE_UID=owner` (uid 1000, non-root — the daemon rejects root).
 - Second uid (cross-uid run only): `ASE_UID2=ase2` (uid 1001, throwaway
@@ -42,7 +42,7 @@
 
 | # | Test | Expected | Result |
 |---|------|----------|--------|
-| D1 | first-launch-load: add secret to home denylist, launch new sandbox | `cat secret` → ENOENT (loaded on first request, no restart, no sleep) | PASS |
+| D1 | first-launch-load: add secret to home denylist, launch new sandbox | `cat secret` → EPERM (loaded on first request, no restart, no sleep) | PASS |
 | D2 | `cat | pipe` delegation | blocked (empty output or error) | PASS |
 | D3 | hardlink to secret | blocked (same inode) | PASS |
 | D4 | env transparency: supplementary groups | inside == outside | PASS |
@@ -53,9 +53,9 @@
 
 | # | Test | Expected | Result |
 |---|------|----------|--------|
-| R1 | uid already loaded; add entry to home list; launch (NO restart) | ENOENT — list re-read on every launch (#5 ping-driven reload) | PASS |
+| R1 | uid already loaded; add entry to home list; launch (NO restart) | EPERM — list re-read on every launch (#5 ping-driven reload) | PASS |
 | R2 | remove that entry from home list; launch (NO restart) | allowed — diff-apply purged the stale key | PASS |
-| R3 | re-add entry; `systemctl restart agent-sandbox-execd`; launch | ENOENT — re-scan re-applied it | PASS |
+| R3 | re-add entry; `systemctl restart agent-sandbox-execd`; launch | EPERM — re-scan re-applied it | PASS |
 
 ## Cross-uid isolation (optional, requires `ASE_UID2`)
 

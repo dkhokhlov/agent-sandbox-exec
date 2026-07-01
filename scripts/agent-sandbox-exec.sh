@@ -3,7 +3,7 @@
 #
 # Migrates this process (and thus all its descendants) into a per-uid agent
 # cgroup so the BPF-LSM denylist blocks opens of the listed secret files (returns
-# ENOENT). The denylist is the union of the root-controlled base list
+# EPERM). The denylist is the union of the root-controlled base list
 # (/etc/agent-sandbox-exec/denylist) and your home list
 # (~/.config/agent-sandbox-exec/denylist); it is re-read on every launch (the
 # request also reloads it) and diff-applied to your cgroup — edits take effect on
@@ -16,7 +16,7 @@
 
 set -eu
 
-VERSION="0.1.1"
+VERSION="0.1.2"
 CGROUP=/sys/fs/cgroup/agent-sandbox-exec
 REQDIR=/run/agent-sandbox-exec/req
 
@@ -26,7 +26,7 @@ Usage: agent-sandbox-exec [--help|--version] <command> [args...]
 
 Run <command> sandboxed: it and every process it spawns is migrated into a
 per-uid agent cgroup, so the BPF-LSM denylist blocks opens of the listed secret
-files (returns ENOENT). cat | pipe, hardlinks, and cp of a listed file are all
+files (returns EPERM). cat | pipe, hardlinks, and cp of a listed file are all
 blocked. The denylist is the union of the root-controlled base list
 (/etc/agent-sandbox-exec/denylist) and your home list
 (~/.config/agent-sandbox-exec/denylist). No namespace is created -- the command
