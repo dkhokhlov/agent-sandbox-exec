@@ -134,6 +134,10 @@ static int denylist_read(char paths[][PATH_MAX], int max)
 		char *p = line_path(line);
 		if (!p)
 			continue;
+		if (p[0] != '/') {
+			fprintf(stderr, "sandboxd: skip non-absolute path: %s\n", p);
+			continue;
+		}
 		strncpy(paths[n], p, PATH_MAX - 1);
 		paths[n][PATH_MAX - 1] = '\0';
 		n++;
@@ -194,28 +198,41 @@ static int ensure_bpffs(void)
 	return 0;
 }
 
-/* Create + delegate the agent cgroup; return its cgroup id (== st_ino), 0 on err. */
+/* Create the agent cgroup (root-owned) and return its cgroup id (== st_ino),
+ * 0 on err. The cgroup is deliberately NOT delegated to AGENT_USER: if a
+ * sandboxed process could write under it, it could mkdir a child cgroup and
+ * migrate there, escaping the exact-cgid equality check in the BPF program.
+ * Migration is performed by this root daemon via the request-dir handshake, so
+ * the agent user never needs write access to the cgroup itself. */
 static __u64 setup_cgroup(void)
 {
-	struct passwd *pw;
 	struct stat st;
 
 	if (mkdir(CGROUP_PATH, 0755) != 0 && errno != EEXIST) {
 		perror("sandboxd: mkdir " CGROUP_PATH);
 		return 0;
 	}
-	pw = getpwnam(AGENT_USER);
-	if (!pw) {
-		fprintf(stderr, "sandboxd: unknown AGENT_USER '%s'\n", AGENT_USER);
-		return 0;
-	}
-	if (chown(CGROUP_PATH, pw->pw_uid, pw->pw_gid) != 0) {
+	/* Reclaim root ownership in case a prior build delegated it to AGENT_USER. */
+	if (chown(CGROUP_PATH, 0, 0) != 0) {
 		perror("sandboxd: chown " CGROUP_PATH);
 		return 0;
 	}
 	if (chmod(CGROUP_PATH, 0755) != 0) {
 		perror("sandboxd: chmod " CGROUP_PATH);
 		return 0;
+	}
+	/* File ownership does not follow a directory chown: a prior delegated build
+	 * may have left cgroup.procs (and cgroup.threads) owned by AGENT_USER, which
+	 * would let the agent self-migrate via a direct write, bypassing this
+	 * daemon's UID-checked request path. Reclaim them too. */
+	{
+		const char *const files[] = { CGROUP_PATH "/cgroup.procs",
+					      CGROUP_PATH "/cgroup.threads",
+					      NULL };
+		for (int i = 0; files[i]; i++) {
+			if (chown(files[i], 0, 0) != 0 && errno != ENOENT)
+				perror("sandboxd: chown cgroup file");
+		}
 	}
 	if (stat(CGROUP_PATH, &st) != 0) {
 		perror("sandboxd: stat " CGROUP_PATH);
@@ -252,28 +269,57 @@ static int setup_request_dir(void)
 	return 0;
 }
 
-/* Migrate the pid named by `name` into the agent cgroup (root-only write),
- * then remove the request file (its disappearance signals the launcher). */
+/* Migrate the pid named by `name` into the agent cgroup (root-only write).
+ * The request file is removed ONLY after a verified successful migration, so
+ * its disappearance is a trustworthy success signal to the launcher; on any
+ * failure the file is left in place and the launcher fails closed (timeout).
+ * The target pid is additionally restricted to AGENT_USER, so a same-uid caller
+ * cannot drive migration of unrelated (e.g. root) pids through the daemon. */
 static void migrate_pid(const char *name)
 {
-	char path[PATH_MAX];
+	char path[PATH_MAX], proc[PATH_MAX];
 	struct stat st;
-	char *end;
+	struct passwd *pw;
+	char line[256], *end;
 	long pid;
+	uid_t real_uid = (uid_t)-1;
+	FILE *pf, *cf;
 
-	snprintf(path, sizeof(path), REQ_DIR "/%s", name);
 	pid = strtol(name, &end, 10);
 	if (*end != '\0' || pid <= 0)
-		goto out;
-	if (stat(path, &st) == 0 && S_ISREG(st.st_mode)) {
-		FILE *cf = fopen(CGROUP_PATH "/cgroup.procs", "w");
-		if (cf) {
-			fprintf(cf, "%ld\n", pid);
-			fclose(cf);
-		}
+		return;				/* not a numeric pid filename */
+
+	snprintf(path, sizeof(path), REQ_DIR "/%s", name);
+	if (stat(path, &st) != 0 || !S_ISREG(st.st_mode))
+		return;
+
+	/* Auth: only migrate processes whose real uid is AGENT_USER. */
+	snprintf(proc, sizeof(proc), "/proc/%ld/status", pid);
+	pf = fopen(proc, "r");
+	if (!pf)
+		return;
+	while (fgets(line, sizeof(line), pf)) {
+		if (sscanf(line, "Uid: %u", &real_uid) == 1)
+			break;
 	}
-out:
-	unlink(path);
+	fclose(pf);
+	pw = getpwnam(AGENT_USER);
+	if (real_uid == (uid_t)-1 || !pw || real_uid != pw->pw_uid)
+		return;
+
+	cf = fopen(CGROUP_PATH "/cgroup.procs", "w");
+	if (!cf) {
+		perror("sandboxd: open cgroup.procs");
+		return;
+	}
+	if (fprintf(cf, "%ld\n", pid) < 0 || fclose(cf) != 0) {
+		fprintf(stderr, "sandboxd: write cgroup.procs failed: %s\n", strerror(errno));
+		return;
+	}
+
+	/* Verified migration: now signal the launcher by removing the request. */
+	if (unlink(path) != 0)
+		perror("sandboxd: unlink request");
 }
 
 int main(void)
@@ -304,10 +350,14 @@ int main(void)
 		return 1;
 	}
 	link = bpf_program__attach(skel->progs.agent_file_open);
-	if (!link) {
-		fprintf(stderr, "sandboxd: attach file_open failed: %s\n", strerror(errno));
-		agent_sandbox_bpf__destroy(skel);
-		return 1;
+	{
+		long attach_err = libbpf_get_error(link);
+		if (attach_err) {
+			fprintf(stderr, "sandboxd: attach file_open failed: %s\n",
+				strerror(-attach_err));
+			agent_sandbox_bpf__destroy(skel);
+			return 1;
+		}
 	}
 
 	cgid = setup_cgroup();

@@ -1,14 +1,14 @@
 #!/bin/sh
-# postinst: enable + start the daemon. sandboxd creates/delegates the cgroup and
-# loads the BPF-LSM program when it starts. Runs as root.
+# postinst: enable + start the daemon. sandboxd creates the cgroup and loads
+# the BPF-LSM program when it starts. Runs as root.
 set -e
 
 mkdir -p /etc/agent-sandbox
 
 if [ -d /run/systemd/system ]; then
-	systemctl daemon-reload || true
-	systemctl enable agent-sandbox.service || true
-	systemctl start agent-sandbox.service || true
+	systemctl daemon-reload
+	systemctl enable agent-sandbox.service
+	systemctl start agent-sandbox.service
 fi
 
 # Sanity hints for the admin.

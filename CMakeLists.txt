@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(agent-sandbox-exec VERSION 0.1.0 LANGUAGES C)
+project(agent-sandbox-exec VERSION 0.1.1 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -44,13 +44,21 @@ add_custom_command(
   COMMENT "Generating vmlinux.h from /sys/kernel/btf/vmlinux"
   VERBATIM)
 
+# Optional BPF debug-info strip; skipped (not fatal) if llvm-strip is absent.
+if(LLVM_STRIP)
+  set(STRIP_CMD ${LLVM_STRIP} -g ${BPF_OBJ})
+else()
+  message(STATUS "llvm-strip not found; BPF debug-info strip will be skipped")
+  set(STRIP_CMD ${CMAKE_COMMAND} -E echo "agent-sandbox: llvm-strip absent, skipping BPF strip")
+endif()
+
 # Compile the BPF program to an object.
 add_custom_command(
   OUTPUT ${BPF_OBJ}
   COMMAND ${CLANG} -g -O2 -Wall -target bpf -D__TARGET_ARCH_x86
           -I${CMAKE_CURRENT_BINARY_DIR} -I${CMAKE_CURRENT_SOURCE_DIR}/src
           -c ${BPF_SRC} -o ${BPF_OBJ}
-  COMMAND ${LLVM_STRIP} -g ${BPF_OBJ}
+  COMMAND ${STRIP_CMD}
   DEPENDS ${BPF_SRC} ${VMLINUX_H}
   COMMENT "Compiling BPF program (agent_sandbox.bpf.c)"
   VERBATIM)
@@ -85,8 +93,11 @@ install(PROGRAMS scripts/agent-sandbox-exec.sh
         DESTINATION ${CMAKE_INSTALL_BINDIR}                  # /usr/local/bin
         RENAME agent-sandbox-exec)
 
+# Vendor systemd unit lives under /usr/lib/systemd/system (not /etc), so dpkg
+# owns its lifecycle across upgrades and admins can still drop an override in
+# /etc/systemd/system. Not marked as a conffile.
 install(FILES scripts/agent-sandbox.service
-        DESTINATION /etc/systemd/system)
+        DESTINATION lib/systemd/system)
 
 install(FILES scripts/denylist.example
         DESTINATION /etc/agent-sandbox
@@ -104,6 +115,10 @@ set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "BPF-LSM file-read denylist for CLI agents
 set(CPACK_PACKAGE_CONTACT            "owner <owner@localhost>")
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER  "owner")
 set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "amd64")
+# Debian-style filename (name_version_arch.deb) so `make install` can glob
+# agent-sandbox-exec_*.deb. Without this CPack defaults to a hyphenated name
+# the Makefile target does not match.
+set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}_${PROJECT_VERSION}_${CPACK_DEBIAN_PACKAGE_ARCHITECTURE}")
 set(CPACK_DEBIAN_PACKAGE_SECTION     "admin")
 set(CPACK_DEBIAN_PACKAGE_PRIORITY    "optional")
 set(CPACK_DEBIAN_PACKAGE_DEPENDS     "libbpf1, libelf1, zlib1g")

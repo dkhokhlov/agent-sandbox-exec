@@ -37,7 +37,7 @@ make deps          # apt install clang llvm libelf-dev libbpf-dev bpftool
 Build + package (unprivileged):
 ```
 make build         # cmake + clang -target bpf + bpftool skeleton + sandboxd
-make package       # -> build/agent-sandbox-exec-0.1.0-Linux.deb
+make package       # -> build/agent-sandbox-exec_0.1.1_amd64.deb
 make test          # Phase A (no root): object has deny_map + file_open
 ```
 
