@@ -5,14 +5,14 @@ set -e
 
 if [ "$1" = "purge" ]; then
 	if [ -d /run/systemd/system ]; then
-		systemctl disable agent-sandbox.service || true
+		systemctl disable agent-sandbox-execd.service || true
 		systemctl daemon-reload || true
 	fi
-	rmdir /sys/fs/cgroup/agent-sandbox 2>/dev/null || true
+	rmdir /sys/fs/cgroup/agent-sandbox-exec 2>/dev/null || true
 	rm -f /sys/fs/bpf/deny_map /sys/fs/bpf/target_cgid_map 2>/dev/null || true
-	# /etc/agent-sandbox/denylist is a conffile -> dpkg removes it on purge;
+	# /etc/agent-sandbox-exec/denylist is a conffile -> dpkg removes it on purge;
 	# tidy the directory if empty.
-	rmdir /etc/agent-sandbox 2>/dev/null || true
+	rmdir /etc/agent-sandbox-exec 2>/dev/null || true
 fi
 
 exit 0

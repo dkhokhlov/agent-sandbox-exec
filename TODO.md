@@ -7,7 +7,7 @@ H3, M6, M8, M9, L1, L3) is committed separately.
 ## Disputed (verified working here, not bugs on this host)
 
 ### H4 — `stat().st_ino` vs `bpf_get_current_cgroup_id()` mismatch
-- **Location:** `src/sandboxd.c` `setup_cgroup` / `src/agent_sandbox.bpf.c:58`
+- **Location:** `src/agent-sandbox-execd.c` `setup_cgroup` / `src/agent_sandbox.bpf.c:58`
 - **Claim:** `st_ino` and the cgroup id are different kernel identifiers; the
   policy could miss entirely. Should use the file-handle API or
   `BPF_MAP_TYPE_CGROUP_ARRAY` + `bpf_current_task_under_cgroup()`.
@@ -53,7 +53,7 @@ H3, M6, M8, M9, L1, L3) is committed separately.
 ## Medium — deferred hardening
 
 ### M1 — deny-map reload creates a transient allow-all window
-- **Location:** `src/sandboxd.c` `denylist_apply` (`map_clear` then repopulate)
+- **Location:** `src/agent-sandbox-execd.c` `denylist_apply` (`map_clear` then repopulate)
 - **Issue:** Every reload clears the map before repopulating; during that
   window all denied files are temporarily readable.
 - **Action:** Build a new map (or a shadow map) and atomically swap, or update
@@ -62,7 +62,7 @@ H3, M6, M8, M9, L1, L3) is committed separately.
   admin edit), but worth doing for correctness.
 
 ### M2 — symlink denylist entries accepted and watched incorrectly
-- **Location:** `src/sandboxd.c` `denylist_apply` (`stat` follows symlinks)
+- **Location:** `src/agent-sandbox-execd.c` `denylist_apply` (`stat` follows symlinks)
 - **Issue:** `stat()` follows symlinks, so a symlinked secret is accepted and
   the *target* inode is denied/watched; retargeting the symlink desyncs the
   watch from the denied inode.
@@ -71,7 +71,7 @@ H3, M6, M8, M9, L1, L3) is committed separately.
   intentionally. Decide which semantics the denylist should promise.
 
 ### M3 — request-dir setup failure still advertises READY
-- **Location:** `src/sandboxd.c:329`
+- **Location:** `src/agent-sandbox-execd.c:329`
 - **Issue:** If `setup_request_dir()` fails, the daemon only logs a warning and
   still sends `READY=1`; the service looks healthy but no agent can be
   sandboxed.
@@ -79,7 +79,7 @@ H3, M6, M8, M9, L1, L3) is committed separately.
   exit non-zero) so systemd restarts and the state is visible.
 
 ### M4 — `inotify_add_watch()` return values ignored
-- **Location:** `src/sandboxd.c:345`, `install_secret_watches`
+- **Location:** `src/agent-sandbox-execd.c:345`, `install_secret_watches`
 - **Issue:** If the denylist-dir, request-dir, or secret-file watch fails to
   register, the daemon silently loses reloads or request handling.
 - **Action:** Check every `inotify_add_watch` return, log the path-specific
@@ -87,7 +87,7 @@ H3, M6, M8, M9, L1, L3) is committed separately.
   can't work).
 
 ### M5 — stale PID file + IN_CREATE-only watch wedges launches on PID wrap
-- **Location:** `scripts/agent-sandbox-exec.sh:69`, `src/sandboxd.c:347`
+- **Location:** `scripts/agent-sandbox-exec.sh:69`, `src/agent-sandbox-execd.c:347`
 - **Issue:** Launcher uses plain `>` on `REQDIR/$$` and the daemon watches only
   `IN_CREATE`. A stale file for a reused PID is truncated (no `IN_CREATE`),
   so the daemon never migrates and the launch always times out.
@@ -96,7 +96,7 @@ H3, M6, M8, M9, L1, L3) is committed separately.
   `IN_CLOSE_WRITE`/`IN_MOVED_TO` as well as `IN_CREATE`.
 
 ### M7 — `MAX_DENY=256` cap below BPF map capacity
-- **Location:** `src/sandboxd.c:55`
+- **Location:** `src/agent-sandbox-execd.c:55`
 - **Issue:** Parser caps at 256 entries but the BPF map holds 1024; extra
   denylist lines are silently ignored, leaving listed secrets readable.
 - **Action:** Size the parser buffer to the map capacity (1024) and fail loudly
@@ -112,11 +112,11 @@ H3, M6, M8, M9, L1, L3) is committed separately.
   unsupported architectures. Only matters if this is built for non-amd64.
 
 ### L4 — `Documentation=` points to a non-installed README
-- **Location:** `scripts/agent-sandbox.service:3`
+- **Location:** `scripts/agent-sandbox-execd.service:3`
 - **Issue:** Unit references `/usr/share/doc/agent-sandbox-exec/README.md`,
   which the package does not install (only manpages ship).
 - **Action:** Point `Documentation=` at the installed man pages
-  (`man:agent-sandbox-exec(1)`, `man:agent-sandbox-denylist(5)`) or install the
+  (`man:agent-sandbox-exec(1)`, `man:agent-sandbox-exec-denylist(5)`) or install the
   README to `/usr/share/doc/agent-sandbox-exec/`.
 
 ### L5 — `AGENT_SANDBOX_INSECURE=1` env bypass
@@ -125,5 +125,5 @@ H3, M6, M8, M9, L1, L3) is committed separately.
   "fail-closed" is not a property of the launcher when the caller controls env.
 - **Status:** Documented and intentional (debugging / emergency escape hatch).
 - **Action:** Keep, but consider requiring an explicit root/admin-controlled
-  opt-in (e.g. a file under `/etc/agent-sandbox/` rather than an env var) so a
+  opt-in (e.g. a file under `/etc/agent-sandbox-exec/` rather than an env var) so a
   compromised agent can't simply export its way out.

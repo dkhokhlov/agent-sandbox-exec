@@ -3,7 +3,7 @@
 
 /*
  * Shared between the BPF program (agent_sandbox.bpf.c, which has vmlinux.h for
- * __u32/__u64) and the daemon (sandboxd.c, which has <linux/types.h>).
+ * __u32/__u64) and the daemon (agent-sandbox-execd.c, which has <linux/types.h>).
  * Keeping this in one place guarantees the deny-map key layout matches exactly.
  */
 

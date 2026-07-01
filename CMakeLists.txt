@@ -49,7 +49,7 @@ if(LLVM_STRIP)
   set(STRIP_CMD ${LLVM_STRIP} -g ${BPF_OBJ})
 else()
   message(STATUS "llvm-strip not found; BPF debug-info strip will be skipped")
-  set(STRIP_CMD ${CMAKE_COMMAND} -E echo "agent-sandbox: llvm-strip absent, skipping BPF strip")
+  set(STRIP_CMD ${CMAKE_COMMAND} -E echo "agent-sandbox-exec: llvm-strip absent, skipping BPF strip")
 endif()
 
 # Compile the BPF program to an object.
@@ -74,19 +74,19 @@ add_custom_command(
 add_custom_target(bpf_skel DEPENDS ${SKEL_H})
 
 # --- daemon -----------------------------------------------------------------
-add_executable(sandboxd src/sandboxd.c)
-target_include_directories(sandboxd PRIVATE
+add_executable(agent-sandbox-execd src/agent-sandbox-execd.c)
+target_include_directories(agent-sandbox-execd PRIVATE
   ${CMAKE_CURRENT_BINARY_DIR}        # agent_sandbox.skel.h
   ${CMAKE_CURRENT_SOURCE_DIR}/src)   # agent_sandbox.h
-target_compile_definitions(sandboxd PRIVATE "AGENT_USER=\"${AGENT_USER}\"")
-target_link_libraries(sandboxd PRIVATE PkgConfig::LIBBPF PkgConfig::LIBELF PkgConfig::ZLIB)
-add_dependencies(sandboxd bpf_skel)
+target_compile_definitions(agent-sandbox-execd PRIVATE "AGENT_USER=\"${AGENT_USER}\"")
+target_link_libraries(agent-sandbox-execd PRIVATE PkgConfig::LIBBPF PkgConfig::LIBELF PkgConfig::ZLIB)
+add_dependencies(agent-sandbox-execd bpf_skel)
 
 
 # --- install rules (used by both `cmake --install` and CPack) ----------------
 include(GNUInstallDirs)
 
-install(TARGETS sandboxd
+install(TARGETS agent-sandbox-execd
         RUNTIME DESTINATION ${CMAKE_INSTALL_SBINDIR})        # /usr/local/sbin
 
 install(PROGRAMS scripts/agent-sandbox-exec.sh
@@ -96,16 +96,16 @@ install(PROGRAMS scripts/agent-sandbox-exec.sh
 # Vendor systemd unit lives under /usr/lib/systemd/system (not /etc), so dpkg
 # owns its lifecycle across upgrades and admins can still drop an override in
 # /etc/systemd/system. Not marked as a conffile.
-install(FILES scripts/agent-sandbox.service
+install(FILES scripts/agent-sandbox-execd.service
         DESTINATION lib/systemd/system)
 
 install(FILES scripts/denylist.example
-        DESTINATION /etc/agent-sandbox
+        DESTINATION /etc/agent-sandbox-exec
         RENAME denylist)
 
 # man pages
 install(FILES man/agent-sandbox-exec.1     DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
-install(FILES man/agent-sandbox-denylist.5 DESTINATION ${CMAKE_INSTALL_MANDIR}/man5)
+install(FILES man/agent-sandbox-exec-denylist.5 DESTINATION ${CMAKE_INSTALL_MANDIR}/man5)
 
 # --- packaging (.deb via CPack) ---------------------------------------------
 set(CPACK_GENERATOR                  DEB)

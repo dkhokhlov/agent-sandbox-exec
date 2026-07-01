@@ -13,11 +13,11 @@ runs
 .I command
 (and its arguments) inside the agent sandbox: the process and every process it
 spawns is migrated into the agent cgroup
-.RI ( /sys/fs/cgroup/agent-sandbox ),
+.RI ( /sys/fs/cgroup/agent-sandbox-exec ),
 where a BPF-LSM program on the
 .I file_open
 hook blocks opens of the files listed in
-.IR /etc/agent-sandbox/denylist ,
+.IR /etc/agent-sandbox-exec/denylist ,
 returning
 .BR ENOENT .
 .PP
@@ -52,11 +52,11 @@ Run
 .TP
 .B AGENT_SANDBOX_CGROUP
 Override the agent cgroup path (default
-.IR /sys/fs/cgroup/agent-sandbox ).
+.IR /sys/fs/cgroup/agent-sandbox-exec ).
 .TP
 .B AGENT_SANDBOX_REQ
 Override the migration request directory (default
-.IR /run/agent-sandbox/req ).
+.IR /run/agent-sandbox-exec/req ).
 .SH "EXIT STATUS"
 .TP
 .B 0
@@ -64,7 +64,7 @@ The command ran and exited 0.
 .TP
 .B 2
 The sandbox was not ready, migration timed out (is
-.B sandboxd
+.B agent-sandbox-execd
 running?), or no command was given. The command was
 .I not
 executed.
@@ -73,7 +73,7 @@ executed.
 Otherwise the command's own exit status.
 .SH "FAIL-CLOSED BEHAVIOUR"
 If
-.B sandboxd
+.B agent-sandbox-execd
 is not running, the command is
 .I not
 execited (exit 2). The launcher never runs a command unprotected unless
@@ -81,13 +81,13 @@ execited (exit 2). The launcher never runs a command unprotected unless
 is set.
 .SH FILES
 .TP
-.I /etc/agent-sandbox/denylist
+.I /etc/agent-sandbox-exec/denylist
 The list of secret files to block \(em see
-.BR agent-sandbox-denylist (5).
+.BR agent-sandbox-exec-denylist (5).
 .TP
-.I /sys/fs/cgroup/agent-sandbox
+.I /sys/fs/cgroup/agent-sandbox-exec
 The agent cgroup.
 .SH "SEE ALSO"
-.BR agent-sandbox-denylist (5),
-.BR sandboxd (8),
+.BR agent-sandbox-exec-denylist (5),
+.BR agent-sandbox-execd (8),
 .BR systemctl (1).
