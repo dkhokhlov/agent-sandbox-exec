@@ -2,7 +2,7 @@
 # scripts/test.sh — agent-sandbox-exec verification.
 #
 # Phase A (no root): the built BPF object has the expected program + maps.
-# Phase B (root + sandboxd running + launcher installed): deny semantics
+# Phase B (root + agent-sandbox-execd running + launcher installed): deny semantics
 #   (ENOENT incl. cat|pipe and hardlink) and env transparency (groups, /proc,
 #   /dev ownership preserved).
 #
@@ -14,8 +14,8 @@ set -u
 P=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 OBJ=$P/build/agent_sandbox.bpf.o
 LAUNCHER=${LAUNCHER:-/usr/bin/agent-sandbox-exec}
-CGROUP=/sys/fs/cgroup/agent-sandbox
-DENYLIST=/etc/agent-sandbox/denylist
+CGROUP=/sys/fs/cgroup/agent-sandbox-exec
+DENYLIST=/etc/agent-sandbox-exec/denylist
 FAIL=0
 
 if command -v bpftool >/dev/null 2>&1; then BPFTOOL=bpftool
@@ -34,14 +34,14 @@ else
 	echo "  (skip: bpftool not found)"
 fi
 
-echo "== Phase B: integration (root + sandboxd + installed launcher) =="
+echo "== Phase B: integration (root + agent-sandbox-execd + installed launcher) =="
 if [ "$(id -u)" != "0" ]; then
 	echo "  SKIP  not root (re-run: sudo $0)"
 	echo "== Phase A exit: $FAIL =="
 	exit "$FAIL"
 fi
 [ -x "$LAUNCHER" ] || { echo "  SKIP  $LAUNCHER not installed (run make install)"; exit "$FAIL"; }
-[ -d "$CGROUP" ]   || { echo "  SKIP  $CGROUP missing (sandboxd running?)"; exit "$FAIL"; }
+[ -d "$CGROUP" ]   || { echo "  SKIP  $CGROUP missing (agent-sandbox-execd running?)"; exit "$FAIL"; }
 
 SECRET=$(mktemp)
 echo "TOPSECRET-$(head -c16 /dev/urandom | base64)" > "$SECRET"
@@ -53,7 +53,7 @@ cleanup() {
 trap cleanup EXIT
 
 grep -q "^$SECRET\$" "$DENYLIST" 2>/dev/null || printf '%s\n' "$SECRET" >> "$DENYLIST"
-sleep 1  # let sandboxd's inotify watcher reload
+sleep 1  # let agent-sandbox-execd's inotify watcher reload
 
 # direct read -> ENOENT
 if "$LAUNCHER" cat "$SECRET" >/tmp/asb_out 2>/tmp/asb_err; then

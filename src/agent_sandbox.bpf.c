@@ -24,7 +24,7 @@
 /* struct ino_key is defined in the shared header agent_sandbox.h. */
 
 /* Denied inodes. Presence of a key => deny; value is unused (stored as 1).
- * Populated by sandboxd from /etc/agent-sandbox/denylist (path -> stat -> ino). */
+ * Populated by agent-sandbox-execd from /etc/agent-sandbox-exec/denylist (path -> stat -> ino). */
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__uint(max_entries, 1024);
@@ -33,7 +33,7 @@ struct {
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
 } deny_map SEC(".maps");
 
-/* The agent's cgroup id (single entry, index 0). Set by sandboxd once it has
+/* The agent's cgroup id (single entry, index 0). Set by agent-sandbox-execd once it has
  * created/delegated the agent cgroup. 0 => program is inert. */
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);

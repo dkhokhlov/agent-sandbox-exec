@@ -2,6 +2,6 @@
 # prerm: stop the daemon (detaches the BPF program) on remove/upgrade.
 set -e
 if [ -d /run/systemd/system ]; then
-	systemctl stop agent-sandbox.service || true
+	systemctl stop agent-sandbox-execd.service || true
 fi
 exit 0

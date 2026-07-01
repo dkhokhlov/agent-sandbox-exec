@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 //
-// sandboxd — root daemon for agent-sandbox-exec.
+// agent-sandbox-execd — root daemon for agent-sandbox-exec.
 //
 //   * loads the BPF-LSM program (file_open) and holds the attachment link,
-//   * owns the deny_map (path -> {dev,ino} from /etc/agent-sandbox/denylist),
-//   * creates + delegates /sys/fs/cgroup/agent-sandbox to AGENT_USER, and sets
+//   * owns the deny_map (path -> {dev,ino} from /etc/agent-sandbox-exec/denylist),
+//   * creates + delegates /sys/fs/cgroup/agent-sandbox-exec to AGENT_USER, and sets
 //     its cgroup id in target_cgid_map (so the BPF program knows what to scope),
 //   * watches the denylist + each secret file and re-resolves on change
 //     (atomic-replace of a secret -> new inode -> map updated).
@@ -41,12 +41,12 @@
 #define AGENT_USER "owner"
 #endif
 
-#define CGROUP_PATH  "/sys/fs/cgroup/agent-sandbox"
+#define CGROUP_PATH  "/sys/fs/cgroup/agent-sandbox-exec"
 #define CGROUP_PARENT "/sys/fs/cgroup"
 #define BPFFS_MNT    "/sys/fs/bpf"
-#define DENYLIST_DIR "/etc/agent-sandbox"
+#define DENYLIST_DIR "/etc/agent-sandbox-exec"
 #define DENYLIST     DENYLIST_DIR "/denylist"
-#define REQ_DIR      "/run/agent-sandbox/req"
+#define REQ_DIR      "/run/agent-sandbox-exec/req"
 
 #ifndef BPF_FS_MAGIC
 #define BPF_FS_MAGIC 0xcafe4a11
@@ -55,8 +55,8 @@
 #define MAX_DENY 256
 
 static int g_ifd = -1;
-static int g_deny_wd = -1;	/* watch on /etc/agent-sandbox + secret files */
-static int g_req_wd = -1;	/* watch on /run/agent-sandbox/req           */
+static int g_deny_wd = -1;	/* watch on /etc/agent-sandbox-exec + secret files */
+static int g_req_wd = -1;	/* watch on /run/agent-sandbox-exec/req           */
 
 /* ----- helpers ------------------------------------------------------------- */
 
@@ -88,7 +88,7 @@ static void sd_notify_ready(void)
 		strncpy(addr.sun_path, ns, sizeof(addr.sun_path) - 1);
 	}
 	if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
-		const char *msg = "READY=1\nSTATUS=agent-sandbox active";
+		const char *msg = "READY=1\nSTATUS=agent-sandbox-exec active";
 		(void)write(fd, msg, strlen(msg));
 	}
 	close(fd);
@@ -127,7 +127,7 @@ static int denylist_read(char paths[][PATH_MAX], int max)
 	char line[PATH_MAX];
 
 	if (!f) {
-		fprintf(stderr, "sandboxd: cannot open %s: %s\n", DENYLIST, strerror(errno));
+		fprintf(stderr, "agent-sandbox-execd: cannot open %s: %s\n", DENYLIST, strerror(errno));
 		return -1;
 	}
 	while (n < max && fgets(line, sizeof(line), f)) {
@@ -135,7 +135,7 @@ static int denylist_read(char paths[][PATH_MAX], int max)
 		if (!p)
 			continue;
 		if (p[0] != '/') {
-			fprintf(stderr, "sandboxd: skip non-absolute path: %s\n", p);
+			fprintf(stderr, "agent-sandbox-execd: skip non-absolute path: %s\n", p);
 			continue;
 		}
 		strncpy(paths[n], p, PATH_MAX - 1);
@@ -156,11 +156,11 @@ static void denylist_apply(struct agent_sandbox_bpf *skel,
 	for (int i = 0; i < n; i++) {
 		struct stat st;
 		if (stat(paths[i], &st) != 0) {
-			fprintf(stderr, "sandboxd: skip %s: %s\n", paths[i], strerror(errno));
+			fprintf(stderr, "agent-sandbox-execd: skip %s: %s\n", paths[i], strerror(errno));
 			continue;
 		}
 		if (!S_ISREG(st.st_mode)) {
-			fprintf(stderr, "sandboxd: skip %s: not a regular file\n", paths[i]);
+			fprintf(stderr, "agent-sandbox-execd: skip %s: not a regular file\n", paths[i]);
 			continue;
 		}
 		struct ino_key key = {
@@ -171,7 +171,7 @@ static void denylist_apply(struct agent_sandbox_bpf *skel,
 		if (bpf_map_update_elem(bpf_map__fd(skel->maps.deny_map), &key, &val, BPF_ANY) == 0)
 			applied++;
 	}
-	printf("sandboxd: denying %d file(s)\n", applied);
+	printf("agent-sandbox-execd: denying %d file(s)\n", applied);
 }
 
 static void install_secret_watches(char paths[][PATH_MAX], int n)
@@ -188,11 +188,11 @@ static int ensure_bpffs(void)
 	if (statfs(BPFFS_MNT, &sfs) == 0 && (unsigned long)sfs.f_type == BPF_FS_MAGIC)
 		return 0;
 	if (mkdir(BPFFS_MNT, 0755) != 0 && errno != EEXIST) {
-		perror("sandboxd: mkdir " BPFFS_MNT);
+		perror("agent-sandbox-execd: mkdir " BPFFS_MNT);
 		return -1;
 	}
 	if (mount("bpf", BPFFS_MNT, "bpf", 0, NULL) != 0) {
-		perror("sandboxd: mount " BPFFS_MNT);
+		perror("agent-sandbox-execd: mount " BPFFS_MNT);
 		return -1;
 	}
 	return 0;
@@ -209,16 +209,16 @@ static __u64 setup_cgroup(void)
 	struct stat st;
 
 	if (mkdir(CGROUP_PATH, 0755) != 0 && errno != EEXIST) {
-		perror("sandboxd: mkdir " CGROUP_PATH);
+		perror("agent-sandbox-execd: mkdir " CGROUP_PATH);
 		return 0;
 	}
 	/* Reclaim root ownership in case a prior build delegated it to AGENT_USER. */
 	if (chown(CGROUP_PATH, 0, 0) != 0) {
-		perror("sandboxd: chown " CGROUP_PATH);
+		perror("agent-sandbox-execd: chown " CGROUP_PATH);
 		return 0;
 	}
 	if (chmod(CGROUP_PATH, 0755) != 0) {
-		perror("sandboxd: chmod " CGROUP_PATH);
+		perror("agent-sandbox-execd: chmod " CGROUP_PATH);
 		return 0;
 	}
 	/* File ownership does not follow a directory chown: a prior delegated build
@@ -231,39 +231,39 @@ static __u64 setup_cgroup(void)
 					      NULL };
 		for (int i = 0; files[i]; i++) {
 			if (chown(files[i], 0, 0) != 0 && errno != ENOENT)
-				perror("sandboxd: chown cgroup file");
+				perror("agent-sandbox-execd: chown cgroup file");
 		}
 	}
 	if (stat(CGROUP_PATH, &st) != 0) {
-		perror("sandboxd: stat " CGROUP_PATH);
+		perror("agent-sandbox-execd: stat " CGROUP_PATH);
 		return 0;
 	}
 	return (__u64)st.st_ino;
 }
 
-/* Create /run/agent-sandbox/req, owned by the agent user, so the unprivileged
+/* Create /run/agent-sandbox-exec/req, owned by the agent user, so the unprivileged
  * launcher can drop migration requests there. */
 static int setup_request_dir(void)
 {
 	struct passwd *pw = getpwnam(AGENT_USER);
 	if (!pw) {
-		fprintf(stderr, "sandboxd: unknown AGENT_USER '%s'\n", AGENT_USER);
+		fprintf(stderr, "agent-sandbox-execd: unknown AGENT_USER '%s'\n", AGENT_USER);
 		return -1;
 	}
-	if (mkdir("/run/agent-sandbox", 0755) != 0 && errno != EEXIST) {
-		perror("sandboxd: mkdir /run/agent-sandbox");
+	if (mkdir("/run/agent-sandbox-exec", 0755) != 0 && errno != EEXIST) {
+		perror("agent-sandbox-execd: mkdir /run/agent-sandbox-exec");
 		return -1;
 	}
 	if (mkdir(REQ_DIR, 0770) != 0 && errno != EEXIST) {
-		perror("sandboxd: mkdir " REQ_DIR);
+		perror("agent-sandbox-execd: mkdir " REQ_DIR);
 		return -1;
 	}
 	if (chown(REQ_DIR, pw->pw_uid, pw->pw_gid) != 0) {
-		perror("sandboxd: chown " REQ_DIR);
+		perror("agent-sandbox-execd: chown " REQ_DIR);
 		return -1;
 	}
 	if (chmod(REQ_DIR, 0770) != 0) {
-		perror("sandboxd: chmod " REQ_DIR);
+		perror("agent-sandbox-execd: chmod " REQ_DIR);
 		return -1;
 	}
 	return 0;
@@ -309,17 +309,17 @@ static void migrate_pid(const char *name)
 
 	cf = fopen(CGROUP_PATH "/cgroup.procs", "w");
 	if (!cf) {
-		perror("sandboxd: open cgroup.procs");
+		perror("agent-sandbox-execd: open cgroup.procs");
 		return;
 	}
 	if (fprintf(cf, "%ld\n", pid) < 0 || fclose(cf) != 0) {
-		fprintf(stderr, "sandboxd: write cgroup.procs failed: %s\n", strerror(errno));
+		fprintf(stderr, "agent-sandbox-execd: write cgroup.procs failed: %s\n", strerror(errno));
 		return;
 	}
 
 	/* Verified migration: now signal the launcher by removing the request. */
 	if (unlink(path) != 0)
-		perror("sandboxd: unlink request");
+		perror("agent-sandbox-execd: unlink request");
 }
 
 int main(void)
@@ -333,7 +333,7 @@ int main(void)
 	libbpf_set_print(libbpf_print_fn);
 
 	if (geteuid() != 0) {
-		fprintf(stderr, "sandboxd: must run as root\n");
+		fprintf(stderr, "agent-sandbox-execd: must run as root\n");
 		return 1;
 	}
 	if (ensure_bpffs() != 0)
@@ -341,11 +341,11 @@ int main(void)
 
 	skel = agent_sandbox_bpf__open();
 	if (!skel) {
-		fprintf(stderr, "sandboxd: open skeleton failed\n");
+		fprintf(stderr, "agent-sandbox-execd: open skeleton failed\n");
 		return 1;
 	}
 	if (agent_sandbox_bpf__load(skel)) {
-		fprintf(stderr, "sandboxd: load failed: %s\n", strerror(errno));
+		fprintf(stderr, "agent-sandbox-execd: load failed: %s\n", strerror(errno));
 		agent_sandbox_bpf__destroy(skel);
 		return 1;
 	}
@@ -353,7 +353,7 @@ int main(void)
 	{
 		long attach_err = libbpf_get_error(link);
 		if (attach_err) {
-			fprintf(stderr, "sandboxd: attach file_open failed: %s\n",
+			fprintf(stderr, "agent-sandbox-execd: attach file_open failed: %s\n",
 				strerror(-attach_err));
 			agent_sandbox_bpf__destroy(skel);
 			return 1;
@@ -368,16 +368,16 @@ int main(void)
 	{
 		__u32 zero = 0;
 		if (bpf_map_update_elem(bpf_map__fd(skel->maps.target_cgid_map), &zero, &cgid, BPF_ANY)) {
-			fprintf(stderr, "sandboxd: set target_cgid failed: %s\n", strerror(errno));
+			fprintf(stderr, "agent-sandbox-execd: set target_cgid failed: %s\n", strerror(errno));
 			agent_sandbox_bpf__destroy(skel);
 			return 1;
 		}
 	}
-	printf("sandboxd: agent cgroup=%s id=%llu; BPF attached\n",
+	printf("agent-sandbox-execd: agent cgroup=%s id=%llu; BPF attached\n",
 	       CGROUP_PATH, (unsigned long long)cgid);
 
 	if (setup_request_dir() != 0)
-		fprintf(stderr, "sandboxd: WARNING: request dir not ready; "
+		fprintf(stderr, "agent-sandbox-execd: WARNING: request dir not ready; "
 				"owner-launched agents cannot be sandboxed\n");
 
 	/* Initial denylist population. */
@@ -388,7 +388,7 @@ int main(void)
 	/* Watch denylist dir (covers edit + atomic replace) + each secret file. */
 	g_ifd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
 	if (g_ifd < 0) {
-		perror("sandboxd: inotify_init1");
+		perror("agent-sandbox-execd: inotify_init1");
 		agent_sandbox_bpf__destroy(skel);
 		return 1;
 	}
@@ -409,7 +409,7 @@ int main(void)
 		if (r < 0) {
 			if (errno == EINTR)
 				continue;
-			perror("sandboxd: poll");
+			perror("agent-sandbox-execd: poll");
 			break;
 		}
 		if (r == 0)
@@ -418,7 +418,7 @@ int main(void)
 		if (n < 0) {
 			if (errno == EAGAIN)
 				continue;
-			perror("sandboxd: inotify read");
+			perror("agent-sandbox-execd: inotify read");
 			continue;
 		}
 		/* Parse events: req-watch -> migrate a pid; anything else -> denylist reload. */
@@ -431,7 +431,7 @@ int main(void)
 			p += sizeof(struct inotify_event) + ev->len;
 		}
 		if (deny_changed) {
-			printf("sandboxd: denylist change, reloading\n");
+			printf("agent-sandbox-execd: denylist change, reloading\n");
 			npaths = denylist_read(paths, MAX_DENY);
 			if (npaths >= 0) {
 				denylist_apply(skel, paths, npaths);

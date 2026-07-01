@@ -8,7 +8,7 @@
 #   - one absolute path per line
 #   - regular FILES only (no directories, no globs)
 #   - blank lines and lines starting with '#' are ignored
-#   - each file must exist (sandboxd stats it -> inode); atomic replaces are
+#   - each file must exist (agent-sandbox-execd stats it -> inode); atomic replaces are
 #     caught by the file watcher and re-resolved
 #
 # Examples (uncomment a line to enable):
