@@ -16,7 +16,7 @@
 
 set -eu
 
-VERSION="0.1.2"
+VERSION="0.1.3"
 CGROUP=/sys/fs/cgroup/agent-sandbox-exec
 REQDIR=/run/agent-sandbox-exec/req
 

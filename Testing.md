@@ -15,7 +15,7 @@
 
 - Kernel: `6.12.88+deb13-amd64`, `CONFIG_BPF_LSM=y`, `bpf` active in
   `/sys/kernel/security/lsm`, cgroup v2 at `/sys/fs/cgroup`.
-- Daemon: `agent-sandbox-execd` 0.1.2 as root via systemd `Type=notify`,
+- Daemon: `agent-sandbox-execd` 0.1.3 as root via systemd `Type=notify`,
   `Restart=on-failure`; pinned maps at `/sys/fs/bpf/{deny_map,agent_cgid_set}`.
 - Test uid: `ASE_UID=owner` (uid 1000, non-root — the daemon rejects root).
 - Second uid (cross-uid run only): `ASE_UID2=ase2` (uid 1001, throwaway

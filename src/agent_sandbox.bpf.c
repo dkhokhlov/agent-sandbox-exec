@@ -34,6 +34,21 @@
 
 /* struct deny_key is defined in the shared header agent_sandbox.h. */
 
+/* Encode a kernel-internal dev_t (i_sb->s_dev, MKDEV form: major<<20|minor)
+ * into the userspace form that stat(2) reports as st_dev (huge_encode_dev), so
+ * the deny_key matches what agent-sandbox-execd stored from stat().st_dev. The
+ * two encodings coincide for major<256 but DIVERGE for extended block majors
+ * (e.g. nvme = 259): stat.st_dev = 0x10305 vs i_sb->s_dev = 0x10300005. Without
+ * this, denies on any major>=256 filesystem (nvme, and others) silently never
+ * match the map key and never fire. Mirrors the kernel's new_encode_dev() /
+ * huge_encode_dev(); MINORBITS = 20. */
+static __always_inline __u64 dev_to_stdev(__u64 sdev)
+{
+	__u32 major = (__u32)(sdev >> 20);
+	__u32 minor = (__u32)sdev & 0xFFFFF;
+	return (__u64)((minor & 0xff) | (major << 8) | ((minor & ~0xffu) << 12));
+}
+
 /* Denied inodes, scoped per cgroup. Presence of a {cgid, dev, ino} key => deny;
  * value is unused (stored as 1). Populated by agent-sandbox-execd as the union
  * of the root-controlled base list (/etc/agent-sandbox-exec/denylist) and the
@@ -76,7 +91,7 @@ int BPF_PROG(agent_file_open, struct file *file, int ret)
 	struct inode *inode = BPF_CORE_READ(file, f_inode);
 	struct deny_key key = {
 		.cgid  = cur,
-		.s_dev = BPF_CORE_READ(inode, i_sb, s_dev),
+		.s_dev = dev_to_stdev(BPF_CORE_READ(inode, i_sb, s_dev)),
 		.ino   = BPF_CORE_READ(inode, i_ino),
 	};
 
