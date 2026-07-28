@@ -33,4 +33,4 @@ clean: ## Remove build artifacts
 	rm -rf $(BUILD)
 
 install: package ## Install the built .deb (sudo)
-	sudo apt-get install -y $(BUILD)/agent-sandbox-exec_*.deb
+	sudo apt-get install -y ./$(BUILD)/agent-sandbox-exec_*.deb
